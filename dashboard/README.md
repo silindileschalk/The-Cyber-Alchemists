@@ -30,5 +30,5 @@ A real-time IoT monitoring and control interface built with **Python**, **Panel*
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/yourusername/solar-tracker-dashboard.git](https://github.com/yourusername/solar-tracker-dashboard.git)
-   cd solar-tracker-dashboard
+   git clone [https://github.com/silindileschalk/The-Cyber-Alchemists.git](https://github.com/silindileschalk/The-Cyber-Alchemists.git)
+   cd The-Cyber-Alchemists
