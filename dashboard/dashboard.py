@@ -786,7 +786,7 @@ sidebar_content = [
 # DASHBOARD TEMPLATE
 # ─────────────────────────────────────────────────────────────
 dashboard = pn.template.FastListTemplate(
-    title="☀️ Solar Tracker Dashboard",
+    title="☀️ Solar Tracker Dashboard ☀️",
     accent_base_color="#0F6E56",
     header_background="#0F6E56",
     theme="dark",
