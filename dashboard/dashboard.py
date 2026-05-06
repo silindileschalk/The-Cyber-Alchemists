@@ -419,14 +419,22 @@ card_lux = make_sensor_card("☀️ LIGHT INTENSITY", PALETTE["lux"], digital_lu
 # STATUS DISPLAYS
 # ─────────────────────────────────────────────────────────────
 display_servo_h = pn.indicators.Number(
-    name="HORIZONTAL", value=0, format="{value:.0f}°", font_size="28pt"
+    name="HORIZONTAL", value=0, format="{value:.0f}°", font_size="28pt",
+    sizing_mode="stretch_width"  # <-- ADD THIS
 )
 display_servo_v = pn.indicators.Number(
-    name="VERTICAL", value=0, format="{value:.0f}°", font_size="28pt"
+    name="VERTICAL", value=0, format="{value:.0f}°", font_size="28pt",
+    sizing_mode="stretch_width"  # <-- ADD THIS
 )
 
-display_time = pn.widgets.StaticText(name="LAST READING", value=WAITING_FOR_ESP32)
-display_conn = pn.widgets.StaticText(name="CONNECTION", value="🔄 Connecting…")
+display_time = pn.widgets.StaticText(
+    name="LAST READING", value=WAITING_FOR_ESP32,
+    sizing_mode="stretch_width"  # <-- ADD THIS
+)
+display_conn = pn.widgets.StaticText(
+    name="CONNECTION", value="🔄 Connecting…",
+    sizing_mode="stretch_width"  # <-- ADD THIS
+)
 
 for display in [display_servo_h, display_servo_v, display_time, display_conn]:
     display.styles = {
@@ -437,7 +445,6 @@ for display in [display_servo_h, display_servo_v, display_time, display_conn]:
         "color": ACCENT_CYAN,
         "font-size": "14px",
     }
-
 
 # ─────────────────────────────────────────────────────────────
 # LIVE CHARTS
@@ -763,10 +770,26 @@ main_content = pn.Column(
             "margin-bottom": "15px",
         }
     ),
-    pn.GridBox(
+    pn.Row(  # <-- CHANGE FROM pn.GridBox to pn.Row
         display_servo_h, 
         display_servo_v, 
-        ncols=2,
+        # ncols=2, <-- REMOVE THIS LINE
+        sizing_mode="stretch_width",
+        styles={"gap": "20px", "margin-bottom": "30px"},
+    ),
+    
+    # Status Row
+    pn.Row(
+        display_time,
+        display_conn,
+        sizing_mode="stretch_width",
+        styles={"gap": "20px", "margin-bottom": "30px"},
+    ),
+    
+    # Status Row
+    pn.Row(
+        display_time,
+        display_conn,
         sizing_mode="stretch_width",
         styles={"gap": "20px", "margin-bottom": "30px"},
     ),
