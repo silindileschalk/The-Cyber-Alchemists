@@ -1,6 +1,6 @@
 """
 EPG317E — Solar Tracker Dashboard
-Live display + Control Panel
+Live display + Control Panel with Futuristic UI
 
 Requirements:
     pip install panel paho-mqtt hvplot pandas
@@ -32,6 +32,25 @@ logger = logging.getLogger(__name__)
 pn.extension("tabulator", sizing_mode="stretch_width", template="fast")
 
 # ─────────────────────────────────────────────────────────────
+# FUTURISTIC COLOR PALETTE & THEME
+# ─────────────────────────────────────────────────────────────
+DARK_BG = "#0a0e27"          # Deep navy-black
+DARKER_BG = "#050810"        # Ultra-dark for contrast
+ACCENT_CYAN = "#00d9ff"      # Neon cyan
+ACCENT_MAGENTA = "#ff00ff"   # Neon magenta
+ACCENT_LIME = "#00ff41"      # Neon lime
+ACCENT_PURPLE = "#b224ef"    # Deep purple
+ACCENT_ORANGE = "#ff6b35"    # Warm orange
+TEXT_PRIMARY = "#e0e6ff"     # Light blue-white
+TEXT_SECONDARY = "#a0adc7"   # Muted blue
+BORDER_GLOW = "#00d9ff"      # Cyan glow
+
+# Custom gradient backgrounds
+GRADIENT_HEADER = "linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%)"
+GRADIENT_CARD = "linear-gradient(135deg, #0f1535 0%, #1a1f3a 100%)"
+GRADIENT_CHART = "linear-gradient(180deg, #0a0e27 0%, #15213e 100%)"
+
+# ─────────────────────────────────────────────────────────────
 # CONSTANTS & CONFIGURATION
 # ─────────────────────────────────────────────────────────────
 # MQTT Configuration
@@ -48,21 +67,21 @@ MAX_READINGS = 20
 MAX_LOG_LINES = 50
 
 # Connection States
-CONNECTION_OK = "✅ Connected"
-CONNECTION_FAILED = "❌ Connection failed"
-CONNECTION_DISCONNECTED = "⚠️ Disconnected — retrying…"
-CONNECTION_ERROR = "❌ MQTT error"
-WAITING_FOR_DATA = "Waiting for data from ESP32..."
-WAITING_FOR_ESP32 = "Waiting for ESP32…"
+CONNECTION_OK = "⚡ ONLINE"
+CONNECTION_FAILED = "⚠️ OFFLINE"
+CONNECTION_DISCONNECTED = "🔄 RECONNECTING"
+CONNECTION_ERROR = "❌ ERROR"
+WAITING_FOR_DATA = "Initializing sensor network..."
+WAITING_FOR_ESP32 = "Waiting for ESP32 signal..."
 MQTT_KEEPALIVE = 60
 
 # Sensor Bounds for Validation
 SENSOR_BOUNDS = {
-    "temperature": (-50, 150),  # °C
-    "humidity": (0, 100),       # %
-    "lux": (0, 100000),         # lux
-    "servo_h": (0, 360),        # degrees (horizontal pan)
-    "servo_v": (0, 360),        # degrees (vertical tilt)
+    "temperature": (-50, 150),
+    "humidity": (0, 100),
+    "lux": (0, 100000),
+    "servo_h": (0, 360),
+    "servo_v": (0, 360),
 }
 
 # Topics the ESP32 publishes sensor readings to
@@ -74,13 +93,174 @@ SENSOR_TOPICS = {
     "servo_v": f"{BASE}/actuators/servo_v",
 }
 
-# Colour Scheme
+# Futuristic Colour Scheme
 PALETTE = {
-    "temperature": "#0F6E56",   # deep teal
-    "humidity": "#185FA5",      # ocean blue
-    "lux": "#BA7517",           # warm amber
-    "servo": "#E85D75",         # coral pink
+    "temperature": "#ff6b35",   # Warm orange
+    "humidity": "#00d9ff",      # Neon cyan
+    "lux": "#00ff41",           # Neon lime
+    "servo": "#ff00ff",         # Neon magenta
 }
+
+
+# ─────────────────────────────────────────────────────────────
+# CUSTOM CSS STYLES
+# ─────────────────────────────────────────────────────────────
+CUSTOM_CSS = """
+:root {
+    --primary-bg: #0a0e27;
+    --secondary-bg: #0f1535;
+    --accent-cyan: #00d9ff;
+    --text-primary: #e0e6ff;
+    --text-secondary: #a0adc7;
+}
+
+body {
+    background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #0f1535 100%) !important;
+    background-attachment: fixed !important;
+    font-family: 'Segoe UI', 'Courier New', monospace !important;
+}
+
+.pn-container {
+    background: transparent !important;
+}
+
+/* Futuristic card styling */
+.bk-root .bk-btn {
+    border-radius: 8px !important;
+    border: 1px solid var(--accent-cyan) !important;
+    background: linear-gradient(135deg, rgba(0, 217, 255, 0.1) 0%, rgba(0, 217, 255, 0.05) 100%) !important;
+    color: var(--accent-cyan) !important;
+    font-weight: 600 !important;
+    transition: all 0.3s ease !important;
+    text-transform: uppercase !important;
+    font-size: 12px !important;
+    letter-spacing: 1px !important;
+}
+
+.bk-root .bk-btn:hover {
+    border-color: var(--accent-cyan) !important;
+    box-shadow: 0 0 20px rgba(0, 217, 255, 0.8), inset 0 0 20px rgba(0, 217, 255, 0.2) !important;
+    background: linear-gradient(135deg, rgba(0, 217, 255, 0.2) 0%, rgba(0, 217, 255, 0.1) 100%) !important;
+}
+
+/* Glowing borders */
+.pn-card {
+    background: linear-gradient(135deg, #0f1535 0%, #1a1f3a 100%) !important;
+    border: 1px solid rgba(0, 217, 255, 0.3) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 0 20px rgba(0, 217, 255, 0.1), inset 0 0 15px rgba(0, 217, 255, 0.05) !important;
+}
+
+/* Text styling */
+.pn-title {
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+    text-shadow: 0 0 10px rgba(0, 217, 255, 0.5) !important;
+    letter-spacing: 2px !important;
+}
+
+.bk-root label {
+    color: var(--text-primary) !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    font-size: 11px !important;
+    letter-spacing: 1px !important;
+}
+
+/* Input fields */
+.bk-root input, .bk-root select, .bk-root textarea {
+    background-color: rgba(15, 21, 53, 0.7) !important;
+    border: 1px solid rgba(0, 217, 255, 0.3) !important;
+    border-radius: 6px !important;
+    color: var(--text-primary) !important;
+    font-family: 'Courier New', monospace !important;
+}
+
+.bk-root input:focus, .bk-root select:focus, .bk-root textarea:focus {
+    border-color: var(--accent-cyan) !important;
+    box-shadow: 0 0 15px rgba(0, 217, 255, 0.6), inset 0 0 10px rgba(0, 217, 255, 0.1) !important;
+    outline: none !important;
+}
+
+/* Table styling */
+.pn-tabulator {
+    background: linear-gradient(135deg, rgba(15, 21, 53, 0.8) 0%, rgba(26, 31, 58, 0.8) 100%) !important;
+    border: 1px solid rgba(0, 217, 255, 0.2) !important;
+    border-radius: 8px !important;
+}
+
+.tabulator .tabulator-header {
+    background: linear-gradient(135deg, rgba(0, 217, 255, 0.1) 0%, rgba(0, 217, 255, 0.05) 100%) !important;
+    border-bottom: 2px solid rgba(0, 217, 255, 0.3) !important;
+}
+
+.tabulator .tabulator-header .tabulator-col {
+    color: var(--accent-cyan) !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    font-size: 11px !important;
+    letter-spacing: 1px !important;
+}
+
+.tabulator .tabulator-row {
+    background: transparent !important;
+    border-bottom: 1px solid rgba(0, 217, 255, 0.1) !important;
+}
+
+.tabulator .tabulator-row .tabulator-cell {
+    color: var(--text-primary) !important;
+    padding: 12px 10px !important;
+}
+
+.tabulator .tabulator-row:hover {
+    background: rgba(0, 217, 255, 0.05) !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px !important;
+    height: 8px !important;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(15, 21, 53, 0.4) !important;
+    border-radius: 10px !important;
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--accent-cyan), var(--accent-cyan)) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 0 10px rgba(0, 217, 255, 0.6) !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #00ffff, #00d9ff) !important;
+    box-shadow: 0 0 15px rgba(0, 217, 255, 1) !important;
+}
+
+/* Panel header */
+.pn-header {
+    background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%) !important;
+    border-bottom: 2px solid rgba(0, 217, 255, 0.3) !important;
+    box-shadow: 0 4px 20px rgba(0, 217, 255, 0.1) !important;
+}
+
+.pn-header h1 {
+    color: var(--accent-cyan) !important;
+    font-weight: 800 !important;
+    text-shadow: 0 0 20px rgba(0, 217, 255, 0.8), 0 0 40px rgba(0, 217, 255, 0.4) !important;
+    letter-spacing: 3px !important;
+}
+
+/* Sidebar */
+.pn-sidebar {
+    background: linear-gradient(180deg, #0a0e27 0%, #0f1535 100%) !important;
+    border-right: 1px solid rgba(0, 217, 255, 0.2) !important;
+}
+"""
+
+# Inject custom CSS
+pn.config.raw_css = [CUSTOM_CSS]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -105,7 +285,6 @@ def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
     try:
         value = float(payload)
         
-        # Check bounds if sensor has bounds defined
         if sensor_key in SENSOR_BOUNDS:
             min_val, max_val = SENSOR_BOUNDS[sensor_key]
             if not (min_val <= value <= max_val):
@@ -122,7 +301,6 @@ def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
 
 # ─────────────────────────────────────────────────────────────
 # SENSOR STATE CLASS
-# Encapsulates all live sensor data and historical readings
 # ─────────────────────────────────────────────────────────────
 class SensorState:
     """Manages sensor readings, live state, and data buffers."""
@@ -131,7 +309,6 @@ class SensorState:
         """Initialize sensor state with rolling buffers."""
         self.max_readings = max_readings
         
-        # Rolling history buffers for trend analysis
         self.readings: Dict[str, deque] = {
             "time": deque(maxlen=max_readings),
             "temperature": deque(maxlen=max_readings),
@@ -139,7 +316,6 @@ class SensorState:
             "lux": deque(maxlen=max_readings),
         }
         
-        # Current live state — always holds the most recent value from ESP32
         self.live: Dict[str, Any] = {
             "temperature": 0.0,
             "humidity": 0.0,
@@ -164,38 +340,22 @@ class SensorState:
         self.live[key] = value
     
     def add_reading_batch(self, timestamp: str) -> None:
-        """
-        Add current live values to rolling buffers.
-        Called when a complete sensor batch arrives (typically on temperature update).
-        """
+        """Add current live values to rolling buffers."""
         self.readings["time"].append(timestamp)
         self.readings["temperature"].append(self.live["temperature"])
         self.readings["humidity"].append(self.live["humidity"])
         self.readings["lux"].append(self.live["lux"])
 
 
-# Initialize shared sensor state
 sensor_state = SensorState()
 message_queue: queue.Queue = queue.Queue()
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR TREND CARDS
-# Each card shows: current value, % change since last reading,
-# and a mini sparkline chart — built with pn.indicators.Trend
+# FUTURISTIC SENSOR TREND CARDS
 # ─────────────────────────────────────────────────────────────
-def make_trend_card(label: str, color: str, chart_style: str = "line") -> Tuple[pn.indicators.Trend, pn.Card]:
-    """
-    Build one sensor card with trend indicator.
-    
-    Args:
-        label: Display name for the sensor (with emoji)
-        color: Hex color code for the card styling
-        chart_style: Type of chart ('line', 'area', 'bar', 'step')
-        
-    Returns:
-        Tuple of (Trend widget, Card container)
-    """
+def make_trend_card(label: str, emoji: str, color: str, chart_style: str = "line") -> Tuple[pn.indicators.Trend, pn.Card]:
+    """Build a futuristic sensor card with neon styling."""
     trend = pn.indicators.Trend(
         name=label,
         data={"x": [0], "y": [0]},
@@ -206,54 +366,60 @@ def make_trend_card(label: str, color: str, chart_style: str = "line") -> Tuple[
         height=180,
         sizing_mode="stretch_width",
     )
+    
     card = pn.Card(
         trend,
         hide_header=True,
         sizing_mode="stretch_width",
         styles={
+            "background": GRADIENT_CARD,
             "border": f"2px solid {color}",
             "border-radius": "12px",
-            "box-shadow": f"0 4px 16px {color}33",
-            "padding": "10px",
+            "box-shadow": f"0 0 30px {color}66, inset 0 0 20px {color}22",
+            "padding": "16px",
         },
     )
     return trend, card
 
 
-trend_temp, card_temp = make_trend_card("🌡 Temperature (°C)", PALETTE["temperature"], "line")
-trend_hum, card_hum = make_trend_card("💧 Humidity (%)", PALETTE["humidity"], "area")
-trend_lux, card_lux = make_trend_card("☀️ Light (lux)", PALETTE["lux"], "bar")
+trend_temp, card_temp = make_trend_card("🌡 TEMPERATURE", "°C", PALETTE["temperature"], "line")
+trend_hum, card_hum = make_trend_card("💧 HUMIDITY", "%", PALETTE["humidity"], "area")
+trend_lux, card_lux = make_trend_card("☀️ LIGHT INTENSITY", "lux", PALETTE["lux"], "bar")
 
 
 # ─────────────────────────────────────────────────────────────
 # STATUS DISPLAYS — servo angles and connection info
 # ─────────────────────────────────────────────────────────────
 display_servo_h = pn.indicators.Number(
-    name="Horizontal Pan (°)", value=0, format="{value:.0f}", font_size="28pt"
+    name="HORIZONTAL PAN", value=0, format="{value:.0f}°", font_size="32pt"
 )
 display_servo_v = pn.indicators.Number(
-    name="Vertical Tilt (°)", value=0, format="{value:.0f}", font_size="28pt"
+    name="VERTICAL TILT", value=0, format="{value:.0f}°", font_size="32pt"
 )
 
-display_time = pn.widgets.StaticText(name="Last reading", value=WAITING_FOR_ESP32)
-display_conn = pn.widgets.StaticText(name="Connection", value="Connecting to broker…")
+display_time = pn.widgets.StaticText(name="⏱ LAST READING", value=WAITING_FOR_ESP32)
+display_conn = pn.widgets.StaticText(name="🌐 CONNECTION STATUS", value="🔄 Connecting to broker…")
+
+# Style the status displays
+for display in [display_servo_h, display_servo_v, display_time, display_conn]:
+    display.styles = {
+        "background": GRADIENT_CARD,
+        "border": f"1px solid {ACCENT_CYAN}",
+        "border-radius": "8px",
+        "padding": "16px",
+        "color": ACCENT_CYAN,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
-# LIVE CHARTS — last 20 readings as hvplot line/area charts
+# LIVE CHARTS — futuristic hvplot charts
 # ─────────────────────────────────────────────────────────────
-live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
-live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
+live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
+live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
 
 
 def refresh_trend_card(trend_widget: pn.indicators.Trend, sensor_key: str) -> None:
-    """
-    Update a Trend card's sparkline and value from the latest readings buffer.
-    
-    Args:
-        trend_widget: The Trend indicator widget to update
-        sensor_key: The sensor key to pull data from (e.g., 'temperature')
-    """
+    """Update a Trend card's sparkline and value from the latest readings buffer."""
     buf = list(sensor_state.readings[sensor_key])
     if len(buf) < 2:
         return
@@ -276,46 +442,47 @@ def refresh_live_charts() -> None:
     try:
         live_chart_temp.object = df.hvplot.line(
             x="time", y="temperature",
-            title="Temperature over time",
+            title="🌡 TEMPERATURE TREND",
             xlabel="Time", ylabel="°C",
-            color=PALETTE["temperature"], line_width=2,
-            responsive=True, height=200,
+            color=PALETTE["temperature"], line_width=3,
+            responsive=True, height=250,
         )
         live_chart_lux.object = df.hvplot.area(
             x="time", y="lux",
-            title="Light intensity over time",
+            title="☀️ LIGHT INTENSITY TREND",
             xlabel="Time", ylabel="lux",
-            color=PALETTE["lux"], alpha=0.5, line_width=2,
-            responsive=True, height=200,
+            color=PALETTE["lux"], alpha=0.6, line_width=2,
+            responsive=True, height=250,
         )
     except Exception as e:
         logger.error(f"Error refreshing live charts: {e}")
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR SUMMARY TABLE
-# A Tabulator table that shows all sensors in one place.
+# SENSOR SUMMARY TABLE — futuristic tabulator
 # ─────────────────────────────────────────────────────────────
 summary_table = pn.widgets.Tabulator(
     pd.DataFrame({
-        "Sensor": ["Temperature", "Humidity", "Light", "Horizontal Pan", "Vertical Tilt"],
+        "Sensor": ["🌡 Temperature", "💧 Humidity", "☀️ Light", "🎯 Horiz. Pan", "🎯 Vert. Tilt"],
         "Reading": ["—"] * 5,
         "Unit": ["°C", "%", "lux", "°", "°"],
-        "Last updated": ["—"] * 5,
+        "Status": ["◐ WAITING"] * 5,
     }),
     show_index=False,
     disabled=True,
-    widths={"Sensor": 150, "Reading": 90, "Unit": 55, "Last updated": 100},
+    widths={"Sensor": 160, "Reading": 100, "Unit": 60, "Status": 120},
     sizing_mode="stretch_width",
-    height=250,
+    height=280,
 )
 
 
 def refresh_summary_table() -> None:
     """Push the latest live values into the summary table."""
     now = sensor_state.live["last_seen"]
+    conn_status = "🟢 ACTIVE" if sensor_state.live["connected"] else "🔴 OFFLINE"
+    
     summary_table.value = pd.DataFrame({
-        "Sensor": ["Temperature", "Humidity", "Light", "Horizontal Pan", "Vertical Tilt"],
+        "Sensor": ["🌡 Temperature", "💧 Humidity", "☀️ Light", "🎯 Horiz. Pan", "🎯 Vert. Tilt"],
         "Reading": [
             f"{sensor_state.live['temperature']:.1f}",
             f"{sensor_state.live['humidity']:.0f}",
@@ -324,20 +491,31 @@ def refresh_summary_table() -> None:
             f"{sensor_state.live['servo_v']:.0f}",
         ],
         "Unit": ["°C", "%", "lux", "°", "°"],
-        "Last updated": [now] * 5,
+        "Status": [conn_status] * 5,
     })
 
 
 # ─────────────────────────────────────────────────────────────
-# MQTT LOG — scrolling live feed of sensor data
+# MQTT LOG — scrolling live feed with tech styling
 # ─────────────────────────────────────────────────────────────
 incoming_log = pn.widgets.TextAreaInput(
-    name="📡 Incoming sensor data",
-    value=f"{WAITING_FOR_DATA}\n",
-    height=200,
+    name="📡 INCOMING SENSOR DATA",
+    value=f"[SYSTEM] {WAITING_FOR_DATA}\n",
+    height=220,
     disabled=True,
     sizing_mode="stretch_width",
 )
+
+incoming_log.styles = {
+    "background": GRADIENT_CHART,
+    "border": f"1px solid {ACCENT_CYAN}",
+    "border-radius": "8px",
+    "color": ACCENT_LIME,
+    "font-family": "'Courier New', monospace",
+    "font-size": "11px",
+    "font-weight": "500",
+    "letter-spacing": "0.5px",
+}
 
 
 def log_incoming(entry: str) -> None:
@@ -347,13 +525,19 @@ def log_incoming(entry: str) -> None:
 
 
 btn_clear_logs = pn.widgets.Button(
-    name="🗑 Clear logs", button_type="danger", width=130
+    name="🗑️  CLEAR LOGS", button_type="danger", width=150
 )
+
+btn_clear_logs.styles = {
+    "background": "linear-gradient(135deg, rgba(255, 0, 0, 0.2) 0%, rgba(255, 0, 0, 0.1) 100%)",
+    "border": "1px solid #ff4444",
+    "color": "#ff6666",
+}
 
 
 def on_clear_logs(event: Any) -> None:
     """Clear the incoming log."""
-    incoming_log.value = "Logs cleared.\n"
+    incoming_log.value = "[SYSTEM] Logs cleared.\n"
     logger.info("Logs cleared by user")
 
 
@@ -366,7 +550,6 @@ btn_clear_logs.on_click(on_clear_logs)
 try:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 except AttributeError:
-    # Fallback for older paho-mqtt versions
     client = mqtt.Client()
 
 
@@ -375,10 +558,9 @@ def on_connect(c: mqtt.Client, userdata: Any, flags: Any, reason_code: int,
     """Handle MQTT connection event."""
     if reason_code == 0:
         sensor_state.update_live("connected", True)
-        display_conn.value = f"{CONNECTION_OK} to {BROKER}"
+        display_conn.value = f"⚡ {CONNECTION_OK} — {BROKER}"
         logger.info(f"Connected to MQTT broker: {BROKER}")
         
-        # Subscribe to all sensor topics
         for topic in SENSOR_TOPICS.values():
             c.subscribe(topic)
             logger.debug(f"Subscribed to: {topic}")
@@ -392,15 +574,12 @@ def on_disconnect(c: mqtt.Client, userdata: Any, disconnect_flags: Any = None,
                   reason_code: Any = None, properties: Any = None) -> None:
     """Handle MQTT disconnection event."""
     sensor_state.update_live("connected", False)
-    display_conn.value = CONNECTION_DISCONNECTED
+    display_conn.value = f"🔄 {CONNECTION_DISCONNECTED}"
     logger.warning(f"Disconnected from MQTT broker (code {reason_code})")
 
 
 def on_message(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-    """
-    Called every time a new MQTT message arrives from the ESP32.
-    Queues messages for processing on the main thread (thread-safe).
-    """
+    """Called every time a new MQTT message arrives from the ESP32."""
     try:
         payload = msg.payload.decode().strip()
         topic = msg.topic
@@ -429,13 +608,11 @@ broker_thread.start()
 
 
 # ─────────────────────────────────────────────────────────────
-# MESSAGE PROCESSING — handle queued MQTT messages on main thread
+# MESSAGE PROCESSING
 # ─────────────────────────────────────────────────────────────
 def create_topic_handlers() -> Dict[str, Callable[[str], None]]:
-    """
-    Create a dispatch dictionary mapping topics to handler functions.
-    More maintainable than if-elif chains.
-    """
+    """Create a dispatch dictionary mapping topics to handler functions."""
+    
     def handle_temperature(payload: str) -> None:
         value = validate_sensor_value("temperature", payload)
         if value is not None:
@@ -476,32 +653,23 @@ topic_handlers = create_topic_handlers()
 
 
 def process_queued_messages() -> None:
-    """
-    Process all queued MQTT messages.
-    Called periodically on the main thread (thread-safe).
-    """
+    """Process all queued MQTT messages on the main thread."""
     try:
         while True:
             topic, payload = message_queue.get(timeout=MESSAGE_QUEUE_TIMEOUT)
             
-            # Route to appropriate handler
             if topic in topic_handlers:
                 topic_handlers[topic](payload)
             else:
                 logger.warning(f"Unknown topic: {topic}")
             
-            # Timestamp the message
             timestamp = get_timestamp()
             sensor_state.update_live("last_seen", timestamp)
-            display_time.value = timestamp
+            display_time.value = f"🟢 {timestamp}"
             
-            # Log the incoming message
             sensor_name = topic.split("/")[-1]
-            log_incoming(f"[{timestamp}]  {sensor_name}: {payload}")
+            log_incoming(f"[{timestamp}] >> {sensor_name.upper()}: {payload}")
             
-            # On temperature reading (sync signal), update all displays
-            # Temperature is used as the sync signal because the ESP32 sends
-            # all sensors together — temperature always arrives last in the sequence.
             if topic == SENSOR_TOPICS["temperature"]:
                 sensor_state.add_reading_batch(timestamp)
                 
@@ -517,72 +685,156 @@ def process_queued_messages() -> None:
         logger.error(f"Error processing queued message: {e}")
 
 
-# Schedule message processing on the main thread
 pn.state.add_periodic_callback(process_queued_messages, period=100)
 
 
 # ─────────────────────────────────────────────────────────────
-# LAYOUT — main content area
+# FUTURISTIC LAYOUT — main content area
 # ─────────────────────────────────────────────────────────────
+
+# Section headers with futuristic styling
+def make_section_header(text: str, emoji: str = "") -> pn.pane.Markdown:
+    """Create a styled section header."""
+    return pn.pane.Markdown(
+        f"## {emoji} {text}",
+        styles={
+            "color": ACCENT_CYAN,
+            "text-shadow": f"0 0 10px {ACCENT_CYAN}",
+            "font-weight": "700",
+            "letter-spacing": "2px",
+            "margin-top": "30px",
+            "margin-bottom": "20px",
+            "font-size": "20px",
+        }
+    )
+
+
 main_content = pn.Column(
-    pn.pane.Markdown("## Live Sensor Readings"),
+    # Hero Section
+    pn.Row(
+        pn.pane.Markdown(
+            """
+            # ⚡ SOLAR TRACKER COMMAND CENTER ⚡
+            **Real-Time Sensor Network | Futuristic Control Panel**
+            """,
+            styles={
+                "color": ACCENT_CYAN,
+                "text-shadow": f"0 0 20px {ACCENT_CYAN}",
+                "font-weight": "800",
+                "text-align": "center",
+            }
+        ),
+        sizing_mode="stretch_width",
+        styles={
+            "background": GRADIENT_HEADER,
+            "border-bottom": f"2px solid {ACCENT_CYAN}",
+            "border-radius": "12px",
+            "padding": "30px 20px",
+            "margin-bottom": "30px",
+        }
+    ),
+    
+    # Live Sensor Readings Section
+    make_section_header("LIVE SENSOR READINGS", "📊"),
     pn.GridBox(
         card_temp, card_hum, card_lux,
         ncols=3,
         sizing_mode="stretch_width",
-        styles={"gap": "16px"},
+        styles={"gap": "20px"},
     ),
 
-    pn.pane.Markdown("## Solar Panel Orientation"),
-    pn.GridBox(display_servo_h, display_servo_v, ncols=2),
+    # Solar Panel Orientation Section
+    make_section_header("SOLAR PANEL ORIENTATION", "🎯"),
+    pn.GridBox(
+        display_servo_h, 
+        display_servo_v, 
+        ncols=2,
+        sizing_mode="stretch_width",
+        styles={"gap": "20px"},
+    ),
+    
+    # Status Info Row
     pn.Row(
-        pn.Column(pn.pane.Markdown("**Last reading**"), display_time),
-        pn.Column(pn.pane.Markdown("**Broker status**"), display_conn),
+        display_time,
+        display_conn,
+        sizing_mode="stretch_width",
+        styles={"gap": "20px"},
     ),
 
-    pn.pane.Markdown("## All Sensors at a Glance"),
+    # Sensor Summary Section
+    make_section_header("SENSOR NETWORK STATUS", "📡"),
     summary_table,
 
-    pn.pane.Markdown("## Trends — last 20 readings"),
-    pn.Row(live_chart_temp, live_chart_lux),
+    # Trends Section
+    make_section_header("LIVE TRENDS ANALYSIS", "📈"),
+    pn.Row(
+        live_chart_temp, 
+        live_chart_lux,
+        sizing_mode="stretch_width",
+        styles={"gap": "20px"},
+    ),
+    
+    sizing_mode="stretch_width",
+    styles={
+        "background": DARK_BG,
+        "padding": "30px",
+        "border-radius": "12px",
+    }
 )
 
 
 # ─────────────────────────────────────────────────────────────
-# LAYOUT — sidebar (logs)
+# LAYOUT — sidebar (logs and info)
 # ─────────────────────────────────────────────────────────────
 sidebar_content = [
     pn.Column(
         pn.Card(
             pn.pane.Markdown(
                 """
-**🔴 Read-Only Dashboard**
+**🔴 DASHBOARD STATUS: LIVE**
 
-This dashboard displays real-time sensor data from the ESP32 solar tracker.
+This is an advanced telemetry interface displaying real-time data from the ESP32 Solar Tracker system.
 
-**Control Notes:**
-- Servo motors and buzzer are controlled via physical button on the ESP32
-- Auto-tracking is enabled at startup (triggered by light levels)
-- All sensor readings update in real-time via MQTT
+**⚙️ System Configuration:**
+- **Broker**: HiveMQ Public (TLS)
+- **Protocol**: MQTT v3.1.1
+- **Refresh Rate**: 100ms
+- **Data Retention**: 20 readings
 
-**Sensors:**
-- 🌡 Temperature & Humidity (DHT11)
-- ☀️ Light intensity (BH1750)
-- 📍 Servo angles (LDR feedback)
+**📊 Active Sensors:**
+- 🌡 DHT11 (Temperature & Humidity)
+- ☀️ BH1750 (Ambient Light)
+- 🎯 Servo Feedback (Pan & Tilt)
+
+**🎮 Control Mode:**
+- Auto-tracking via LDR feedback
+- Physical buttons on ESP32
+- Real-time telemetry streaming
             """
             ),
-            title="ℹ️ Dashboard Info",
+            title="🖥️ SYSTEM INFO",
             collapsed=False,
             sizing_mode="stretch_width",
+            styles={
+                "background": GRADIENT_CARD,
+                "border": f"1px solid {ACCENT_CYAN}",
+                "border-radius": "8px",
+            }
         ),
-        pn.Spacer(height=10),
+        pn.Spacer(height=15),
         pn.Card(
             incoming_log,
-            btn_clear_logs,
-            title="📡 MQTT Log",
+            pn.Row(btn_clear_logs, sizing_mode="stretch_width"),
+            title="📡 MQTT TELEMETRY STREAM",
             collapsed=False,
             sizing_mode="stretch_width",
+            styles={
+                "background": GRADIENT_CARD,
+                "border": f"1px solid {ACCENT_CYAN}",
+                "border-radius": "8px",
+            }
         ),
+        sizing_mode="stretch_width",
     )
 ]
 
@@ -591,15 +843,15 @@ This dashboard displays real-time sensor data from the ESP32 solar tracker.
 # DASHBOARD TEMPLATE
 # ─────────────────────────────────────────────────────────────
 dashboard = pn.template.FastListTemplate(
-    title="☀️ Solar Tracker Dashboard ☀️",
-    accent_base_color="#0F6E56",
-    header_background="#0F6E56",
+    title="☀️ SOLAR TRACKER COMMAND CENTER ☀️",
+    accent_base_color=ACCENT_CYAN,
+    header_background=DARK_BG,
     theme="dark",
-    theme_toggle=True,
-    main_max_width="1400px",
+    theme_toggle=False,
+    main_max_width="1600px",
     sidebar=sidebar_content,
     main=[main_content],
 )
 
-logger.info("Dashboard initialized and ready to display")
+logger.info("✨ Futuristic Dashboard initialized — Telemetry system online!")
 dashboard.show()
