@@ -21,7 +21,7 @@ from datetime import datetime
 from collections import deque
 from typing import Optional, Dict, Callable, Tuple, Any
 from bokeh.plotting import figure
-from bokeh.models import Circle, AnnularWedge
+from bokeh.models import ColumnDataSource
 
 # ─────────────────────────────────────────────────────────────
 # LOGGING SETUP
@@ -37,18 +37,17 @@ pn.extension("tabulator", sizing_mode="stretch_width", template="fast")
 # ─────────────────────────────────────────────────────────────
 # FUTURISTIC COLOR PALETTE & THEME
 # ─────────────────────────────────────────────────────────────
-DARK_BG = "#0a0e27"          # Deep navy-black
-DARKER_BG = "#050810"        # Ultra-dark for contrast
-ACCENT_CYAN = "#00d9ff"      # Neon cyan
-ACCENT_MAGENTA = "#ff00ff"   # Neon magenta
-ACCENT_LIME = "#00ff41"      # Neon lime
-ACCENT_PURPLE = "#b224ef"    # Deep purple
-ACCENT_ORANGE = "#ff6b35"    # Warm orange
-TEXT_PRIMARY = "#e0e6ff"     # Light blue-white
-TEXT_SECONDARY = "#a0adc7"   # Muted blue
-BORDER_GLOW = "#00d9ff"      # Cyan glow
+DARK_BG = "#0a0e27"
+DARKER_BG = "#050810"
+ACCENT_CYAN = "#00d9ff"
+ACCENT_MAGENTA = "#ff00ff"
+ACCENT_LIME = "#00ff41"
+ACCENT_PURPLE = "#b224ef"
+ACCENT_ORANGE = "#ff6b35"
+TEXT_PRIMARY = "#e0e6ff"
+TEXT_SECONDARY = "#a0adc7"
+BORDER_GLOW = "#00d9ff"
 
-# Custom gradient backgrounds
 GRADIENT_HEADER = "linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%)"
 GRADIENT_CARD = "linear-gradient(135deg, #0f1535 0%, #1a1f3a 100%)"
 GRADIENT_CHART = "linear-gradient(180deg, #0a0e27 0%, #15213e 100%)"
@@ -56,20 +55,15 @@ GRADIENT_CHART = "linear-gradient(180deg, #0a0e27 0%, #15213e 100%)"
 # ─────────────────────────────────────────────────────────────
 # CONSTANTS & CONFIGURATION
 # ─────────────────────────────────────────────────────────────
-# MQTT Configuration
 BROKER = "broker.hivemq.com"
 PORT = 1883
 TEAM_ID = "TheCyberAlchemists"
 BASE = f"epg317e/solar/{TEAM_ID}"
 
-# Message Queue Configuration
-MESSAGE_QUEUE_TIMEOUT = 0.1  # seconds
-
-# Data Configuration
+MESSAGE_QUEUE_TIMEOUT = 0.1
 MAX_READINGS = 20
 MAX_LOG_LINES = 50
 
-# Connection States
 CONNECTION_OK = "⚡ ONLINE"
 CONNECTION_FAILED = "⚠️ OFFLINE"
 CONNECTION_DISCONNECTED = "🔄 RECONNECTING"
@@ -78,7 +72,6 @@ WAITING_FOR_DATA = "Initializing sensor network..."
 WAITING_FOR_ESP32 = "Waiting for ESP32 signal..."
 MQTT_KEEPALIVE = 60
 
-# Sensor Bounds for Validation
 SENSOR_BOUNDS = {
     "temperature": (-50, 150),
     "humidity": (0, 100),
@@ -87,7 +80,6 @@ SENSOR_BOUNDS = {
     "servo_v": (0, 360),
 }
 
-# Topics the ESP32 publishes sensor readings to
 SENSOR_TOPICS = {
     "temperature": f"{BASE}/sensors/temperature",
     "humidity": f"{BASE}/sensors/humidity",
@@ -96,14 +88,12 @@ SENSOR_TOPICS = {
     "servo_v": f"{BASE}/actuators/servo_v",
 }
 
-# Futuristic Colour Scheme
 PALETTE = {
-    "temperature": "#ff6b35",   # Warm orange
-    "humidity": "#00d9ff",      # Neon cyan
-    "lux": "#00ff41",           # Neon lime
-    "servo": "#ff00ff",         # Neon magenta
+    "temperature": "#ff6b35",
+    "humidity": "#00d9ff",
+    "lux": "#00ff41",
+    "servo": "#ff00ff",
 }
-
 
 # ─────────────────────────────────────────────────────────────
 # CUSTOM CSS STYLES
@@ -127,7 +117,6 @@ body {
     background: transparent !important;
 }
 
-/* Futuristic card styling */
 .bk-root .bk-btn {
     border-radius: 8px !important;
     border: 1px solid var(--accent-cyan) !important;
@@ -146,7 +135,6 @@ body {
     background: linear-gradient(135deg, rgba(0, 217, 255, 0.2) 0%, rgba(0, 217, 255, 0.1) 100%) !important;
 }
 
-/* Glowing borders */
 .pn-card {
     background: linear-gradient(135deg, #0f1535 0%, #1a1f3a 100%) !important;
     border: 1px solid rgba(0, 217, 255, 0.3) !important;
@@ -154,23 +142,22 @@ body {
     box-shadow: 0 0 20px rgba(0, 217, 255, 0.1), inset 0 0 15px rgba(0, 217, 255, 0.05) !important;
 }
 
-/* Text styling */
 .pn-title {
     color: var(--text-primary) !important;
     font-weight: 700 !important;
     text-shadow: 0 0 10px rgba(0, 217, 255, 0.5) !important;
     letter-spacing: 2px !important;
+    font-size: 14px !important;
 }
 
 .bk-root label {
     color: var(--text-primary) !important;
     font-weight: 600 !important;
     text-transform: uppercase !important;
-    font-size: 11px !important;
+    font-size: 12px !important;
     letter-spacing: 1px !important;
 }
 
-/* Input fields */
 .bk-root input, .bk-root select, .bk-root textarea {
     background-color: rgba(15, 21, 53, 0.7) !important;
     border: 1px solid rgba(0, 217, 255, 0.3) !important;
@@ -185,7 +172,6 @@ body {
     outline: none !important;
 }
 
-/* Table styling */
 .pn-tabulator {
     background: linear-gradient(135deg, rgba(15, 21, 53, 0.8) 0%, rgba(26, 31, 58, 0.8) 100%) !important;
     border: 1px solid rgba(0, 217, 255, 0.2) !important;
@@ -213,13 +199,13 @@ body {
 .tabulator .tabulator-row .tabulator-cell {
     color: var(--text-primary) !important;
     padding: 12px 10px !important;
+    font-size: 13px !important;
 }
 
 .tabulator .tabulator-row:hover {
     background: rgba(0, 217, 255, 0.05) !important;
 }
 
-/* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 8px !important;
     height: 8px !important;
@@ -241,7 +227,6 @@ body {
     box-shadow: 0 0 15px rgba(0, 217, 255, 1) !important;
 }
 
-/* Panel header */
 .pn-header {
     background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%) !important;
     border-bottom: 2px solid rgba(0, 217, 255, 0.3) !important;
@@ -255,16 +240,17 @@ body {
     letter-spacing: 3px !important;
 }
 
-/* Sidebar */
 .pn-sidebar {
     background: linear-gradient(180deg, #0a0e27 0%, #0f1535 100%) !important;
     border-right: 1px solid rgba(0, 217, 255, 0.2) !important;
 }
+
+.pn-indicator-number {
+    font-size: 28pt !important;
+}
 """
 
-# Inject custom CSS
 pn.config.raw_css = [CUSTOM_CSS]
-
 
 # ─────────────────────────────────────────────────────────────
 # UTILITY FUNCTIONS
@@ -275,19 +261,9 @@ def get_timestamp() -> str:
 
 
 def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
-    """
-    Parse and validate sensor payload.
-    
-    Args:
-        sensor_key: The sensor identifier
-        payload: The raw string payload from MQTT
-        
-    Returns:
-        Validated float value, or None if invalid
-    """
+    """Parse and validate sensor payload."""
     try:
         value = float(payload)
-        
         if sensor_key in SENSOR_BOUNDS:
             min_val, max_val = SENSOR_BOUNDS[sensor_key]
             if not (min_val <= value <= max_val):
@@ -295,7 +271,6 @@ def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
                     f"Sensor '{sensor_key}' value {value} out of bounds [{min_val}, {max_val}]"
                 )
                 return None
-        
         return value
     except ValueError as e:
         logger.error(f"Could not parse {sensor_key} payload '{payload}': {e}")
@@ -303,65 +278,49 @@ def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
 
 
 # ─────────────────────────────────────────────────────────────
-# ANALOG GAUGE CREATION
+# ANALOG GAUGE CREATION (FIXED - Using Bokeh properly)
 # ─────────────────────────────────────────────────────────────
-def create_analog_gauge(value: float = 0, max_value: float = 100, 
-                       color: str = ACCENT_CYAN, title: str = "") -> pn.pane.Bokeh:
-    """
-    Create a futuristic half-circle analog gauge using Bokeh.
-    
-    Args:
-        value: Current gauge value
-        max_value: Maximum gauge value
-        color: Gauge color (hex)
-        title: Gauge title
-        
-    Returns:
-        Panel Bokeh pane with the gauge
-    """
-    # Create figure with transparent background
+def create_analog_gauge_bokeh(value: float, max_value: float, color: str) -> figure:
+    """Create a professional analog gauge using Bokeh."""
     p = figure(
-        width=250, height=150,
+        width=320,
+        height=180,
         toolbar_location=None,
         tools="",
-        min_border=0, max_border=0,
-        margin=(0, 0, 0, 0)
+        min_border=10,
+        max_border=10,
+        margin=(5, 5, 5, 5)
     )
     
-    # Set background colors
     p.background_fill_color = None
     p.border_fill_color = None
     p.outline_line_color = None
     p.grid.visible = False
     p.axis.visible = False
     
-    # Normalize value to 0-180 degrees (half circle)
+    # Normalize to 0-180 degrees
     angle = (value / max_value) * math.pi
     
-    # Draw background arc (full half circle)
-    background_arc = AnnularWedge(
-        x=0, y=0, inner_radius=0.65, outer_radius=0.85,
-        start_angle=0, end_angle=math.pi,
-        fill_color="#1a1f3a", line_color=ACCENT_CYAN, line_width=2
-    )
-    p.add_glyph(p.renderers[0].data_source if p.renderers else None, background_arc)
+    # Background arc (light)
+    angles_bg = [i * (math.pi / 50) for i in range(51)]
+    x_bg = [0.75 * math.cos(a) for a in angles_bg]
+    y_bg = [0.75 * math.sin(a) for a in angles_bg]
+    p.line(x_bg, y_bg, line_width=14, color=ACCENT_CYAN, alpha=0.15)
     
-    # Draw value arc (dynamic)
-    value_arc = AnnularWedge(
-        x=0, y=0, inner_radius=0.65, outer_radius=0.85,
-        start_angle=0, end_angle=angle,
-        fill_color=color, line_color=color, line_width=1, alpha=0.8
-    )
-    p.add_glyph(p.renderers[0].data_source if p.renderers else None, value_arc)
+    # Value arc (bright)
+    if angle > 0:
+        angles_val = [i * (angle / 25) for i in range(26)]
+        x_val = [0.75 * math.cos(a) for a in angles_val]
+        y_val = [0.75 * math.sin(a) for a in angles_val]
+        p.line(x_val, y_val, line_width=14, color=color, alpha=0.95)
     
-    # Add glow effect circle in center
-    p.circle(x=0, y=0, size=15, fill_color=color, line_color=color, alpha=0.6)
+    # Center dot
+    p.circle(x=0, y=0, size=24, fill_color=color, line_color=color, alpha=0.85)
     
-    # Set axis range
-    p.x_range.start, p.x_range.end = -1, 1
-    p.y_range.start, p.y_range.end = -0.2, 1
+    p.x_range.start, p.x_range.end = -1.05, 1.05
+    p.y_range.start, p.y_range.end = -0.25, 1.05
     
-    return pn.pane.Bokeh(p, height=150, sizing_mode="stretch_width")
+    return p
 
 
 # ─────────────────────────────────────────────────────────────
@@ -417,126 +376,56 @@ message_queue: queue.Queue = queue.Queue()
 
 
 # ─────────────────────────────────────────────────────────────
-# ANALOG GAUGE WIDGETS (DYNAMIC UPDATES)
+# ANALOG GAUGE PANES (DYNAMIC)
 # ─────────────────────────────────────────────────────────────
-analog_temp = pn.pane.Bokeh(height=150, sizing_mode="stretch_width")
-analog_hum = pn.pane.Bokeh(height=150, sizing_mode="stretch_width")
-analog_lux = pn.pane.Bokeh(height=150, sizing_mode="stretch_width")
+analog_temp_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 200, PALETTE["temperature"]), sizing_mode="stretch_width", height=180)
+analog_hum_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 100, PALETTE["humidity"]), sizing_mode="stretch_width", height=180)
+analog_lux_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 100, PALETTE["lux"]), sizing_mode="stretch_width", height=180)
 
 
-def update_analog_gauge(pane: pn.pane.Bokeh, value: float, max_value: float, 
-                       color: str) -> None:
-    """Update an analog gauge with new value."""
-    p = figure(
-        width=250, height=150,
-        toolbar_location=None,
-        tools="",
-        min_border=0, max_border=0,
-        margin=(0, 0, 0, 0)
-    )
-    
-    p.background_fill_color = None
-    p.border_fill_color = None
-    p.outline_line_color = None
-    p.grid.visible = False
-    p.axis.visible = False
-    
-    angle = (value / max_value) * math.pi
-    
-    # Background arc
-    from bokeh.models import ColumnDataSource
-    
-    # Draw arcs using line segments for better control
-    angles_bg = [i * (math.pi / 50) for i in range(51)]
-    x_bg = [0.75 * math.cos(a) for a in angles_bg]
-    y_bg = [0.75 * math.sin(a) for a in angles_bg]
-    
-    p.line(x_bg, y_bg, line_width=12, color=ACCENT_CYAN, alpha=0.2)
-    
-    # Value arc
-    angles_val = [i * (angle / 25) for i in range(26)]
-    x_val = [0.75 * math.cos(a) for a in angles_val]
-    y_val = [0.75 * math.sin(a) for a in angles_val]
-    
-    p.line(x_val, y_val, line_width=12, color=color, alpha=0.9)
-    
-    # Center indicator dot
-    p.circle(x=0, y=0, size=20, fill_color=color, line_color=color, alpha=0.8)
-    
-    p.x_range.start, p.x_range.end = -1, 1
-    p.y_range.start, p.y_range.end = -0.2, 1
-    
-    pane.object = p
+def update_analog_gauge_display(pane: pn.pane.Bokeh, value: float, max_value: float, color: str) -> None:
+    """Update analog gauge display."""
+    pane.object = create_analog_gauge_bokeh(value, max_value, color)
 
 
 # ─────────────────────────────────────────────────────────────
-# FUTURISTIC SENSOR TREND CARDS WITH ANALOG GAUGES
+# SENSOR CARDS WITH GAUGES
 # ─────────────────────────────────────────────────────────────
-def make_trend_card_with_analog(label: str, emoji: str, color: str, 
-                               analog_pane: pn.pane.Bokeh, 
-                               chart_style: str = "line") -> Tuple[pn.indicators.Trend, pn.Card]:
-    """Build a futuristic sensor card with trend and analog gauge."""
-    trend = pn.indicators.Trend(
-        name=label,
-        data={"x": [0], "y": [0]},
-        value=0,
-        value_change=0,
-        plot_type=chart_style,
-        plot_color=color,
-        height=180,
-        sizing_mode="stretch_width",
-    )
-    
-    # Create composite card with trend on top and analog gauge at bottom right
-    card_content = pn.Column(
-        trend,
-        sizing_mode="stretch_width",
-        styles={"height": "100%"}
-    )
-    
+def make_sensor_card(title: str, color: str, gauge_pane: pn.pane.Bokeh) -> pn.Card:
+    """Create a professional sensor card with analog gauge."""
     card = pn.Card(
-        pn.Row(
-            card_content,
-            pn.Column(
-                analog_pane,
-                sizing_mode="stretch_width",
-                styles={"min-width": "250px"}
-            ),
-            sizing_mode="stretch_width",
-            styles={"gap": "10px"}
-        ),
-        hide_header=True,
+        gauge_pane,
+        title=title,
         sizing_mode="stretch_width",
         styles={
             "background": GRADIENT_CARD,
             "border": f"2px solid {color}",
             "border-radius": "12px",
-            "box-shadow": f"0 0 30px {color}66, inset 0 0 20px {color}22",
-            "padding": "16px",
-        },
+            "box-shadow": f"0 0 25px {color}55, inset 0 0 15px {color}11",
+            "padding": "20px",
+        }
     )
-    return trend, card
+    return card
 
 
-trend_temp, card_temp = make_trend_card_with_analog("🌡 TEMPERATURE", "°C", PALETTE["temperature"], analog_temp, "line")
-trend_hum, card_hum = make_trend_card_with_analog("💧 HUMIDITY", "%", PALETTE["humidity"], analog_hum, "area")
-trend_lux, card_lux = make_trend_card_with_analog("☀️ LIGHT INTENSITY", "lux", PALETTE["lux"], analog_lux, "bar")
+card_temp = make_sensor_card("🌡 TEMPERATURE", PALETTE["temperature"], analog_temp_pane)
+card_hum = make_sensor_card("💧 HUMIDITY", PALETTE["humidity"], analog_hum_pane)
+card_lux = make_sensor_card("☀️ LIGHT INTENSITY", PALETTE["lux"], analog_lux_pane)
 
 
 # ─────────────────────────────────────────────────────────────
-# STATUS DISPLAYS — servo angles and connection info
+# STATUS DISPLAYS
 # ─────────────────────────────────────────────────────────────
 display_servo_h = pn.indicators.Number(
-    name="HORIZONTAL PAN", value=0, format="{value:.0f}°", font_size="32pt"
+    name="HORIZONTAL", value=0, format="{value:.0f}°", font_size="28pt"
 )
 display_servo_v = pn.indicators.Number(
-    name="VERTICAL TILT", value=0, format="{value:.0f}°", font_size="32pt"
+    name="VERTICAL", value=0, format="{value:.0f}°", font_size="28pt"
 )
 
-display_time = pn.widgets.StaticText(name="⏱ LAST READING", value=WAITING_FOR_ESP32)
-display_conn = pn.widgets.StaticText(name="🌐 CONNECTION STATUS", value="🔄 Connecting to broker…")
+display_time = pn.widgets.StaticText(name="LAST READING", value=WAITING_FOR_ESP32)
+display_conn = pn.widgets.StaticText(name="CONNECTION", value="🔄 Connecting…")
 
-# Style the status displays
 for display in [display_servo_h, display_servo_v, display_time, display_conn]:
     display.styles = {
         "background": GRADIENT_CARD,
@@ -544,29 +433,15 @@ for display in [display_servo_h, display_servo_v, display_time, display_conn]:
         "border-radius": "8px",
         "padding": "16px",
         "color": ACCENT_CYAN,
+        "font-size": "14px",
     }
 
 
 # ─────────────────────────────────────────────────────────────
-# LIVE CHARTS — futuristic hvplot charts
+# LIVE CHARTS
 # ─────────────────────────────────────────────────────────────
 live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
 live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
-
-
-def refresh_trend_card(trend_widget: pn.indicators.Trend, sensor_key: str) -> None:
-    """Update a Trend card's sparkline and value from the latest readings buffer."""
-    buf = list(sensor_state.readings[sensor_key])
-    if len(buf) < 2:
-        return
-    
-    current = buf[-1]
-    previous = buf[-2]
-    pct_change = (current - previous) / abs(previous) if previous != 0 else 0.0
-    
-    trend_widget.data = {"x": list(range(len(buf))), "y": buf}
-    trend_widget.value = round(current, 2)
-    trend_widget.value_change = round(pct_change, 4)
 
 
 def refresh_analog_gauges() -> None:
@@ -575,19 +450,14 @@ def refresh_analog_gauges() -> None:
     hum = sensor_state.live["humidity"]
     lux = sensor_state.live["lux"]
     
-    # Temperature: -50 to 150°C
-    update_analog_gauge(analog_temp, temp + 50, 200, PALETTE["temperature"])
-    
-    # Humidity: 0 to 100%
-    update_analog_gauge(analog_hum, hum, 100, PALETTE["humidity"])
-    
-    # Light: 0 to 100000 lux (scaled to 0-100 for display)
+    update_analog_gauge_display(analog_temp_pane, temp + 50, 200, PALETTE["temperature"])
+    update_analog_gauge_display(analog_hum_pane, hum, 100, PALETTE["humidity"])
     lux_scaled = min(lux / 1000, 100)
-    update_analog_gauge(analog_lux, lux_scaled, 100, PALETTE["lux"])
+    update_analog_gauge_display(analog_lux_pane, lux_scaled, 100, PALETTE["lux"])
 
 
 def refresh_live_charts() -> None:
-    """Redraw the temperature and lux hvplot charts from the current readings buffer."""
+    """Redraw the live hvplot charts."""
     df = sensor_state.to_dataframe()
     if len(df) < 2:
         return
@@ -595,15 +465,15 @@ def refresh_live_charts() -> None:
     try:
         live_chart_temp.object = df.hvplot.line(
             x="time", y="temperature",
-            title="🌡 TEMPERATURE TREND",
-            xlabel="Time", ylabel="°C",
-            color=PALETTE["temperature"], line_width=3,
+            title="Temperature Trend",
+            xlabel="", ylabel="°C",
+            color=PALETTE["temperature"], line_width=2,
             responsive=True, height=250,
         )
         live_chart_lux.object = df.hvplot.area(
             x="time", y="lux",
-            title="☀️ LIGHT INTENSITY TREND",
-            xlabel="Time", ylabel="lux",
+            title="Light Intensity Trend",
+            xlabel="", ylabel="lux",
             color=PALETTE["lux"], alpha=0.6, line_width=2,
             responsive=True, height=250,
         )
@@ -612,30 +482,28 @@ def refresh_live_charts() -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR SUMMARY TABLE — futuristic tabulator
+# SENSOR SUMMARY TABLE
 # ─────────────────────────────────────────────────────────────
 summary_table = pn.widgets.Tabulator(
     pd.DataFrame({
-        "Sensor": ["🌡 Temperature", "💧 Humidity", "☀️ Light", "🎯 Horiz. Pan", "🎯 Vert. Tilt"],
+        "Sensor": ["Temperature", "Humidity", "Light", "Pan", "Tilt"],
         "Reading": ["—"] * 5,
         "Unit": ["°C", "%", "lux", "°", "°"],
-        "Status": ["◐ WAITING"] * 5,
     }),
     show_index=False,
     disabled=True,
-    widths={"Sensor": 160, "Reading": 100, "Unit": 60, "Status": 120},
+    widths={"Sensor": 140, "Reading": 120, "Unit": 80},
     sizing_mode="stretch_width",
-    height=280,
+    height=260,
 )
 
 
 def refresh_summary_table() -> None:
-    """Push the latest live values into the summary table."""
-    now = sensor_state.live["last_seen"]
-    conn_status = "🟢 ACTIVE" if sensor_state.live["connected"] else "🔴 OFFLINE"
+    """Update the summary table."""
+    conn_status = "ACTIVE" if sensor_state.live["connected"] else "OFFLINE"
     
     summary_table.value = pd.DataFrame({
-        "Sensor": ["🌡 Temperature", "💧 Humidity", "☀️ Light", "🎯 Horiz. Pan", "🎯 Vert. Tilt"],
+        "Sensor": ["Temperature", "Humidity", "Light", "Pan", "Tilt"],
         "Reading": [
             f"{sensor_state.live['temperature']:.1f}",
             f"{sensor_state.live['humidity']:.0f}",
@@ -644,17 +512,16 @@ def refresh_summary_table() -> None:
             f"{sensor_state.live['servo_v']:.0f}",
         ],
         "Unit": ["°C", "%", "lux", "°", "°"],
-        "Status": [conn_status] * 5,
     })
 
 
 # ─────────────────────────────────────────────────────────────
-# MQTT LOG — scrolling live feed with tech styling
+# MQTT LOG
 # ─────────────────────────────────────────────────────────────
 incoming_log = pn.widgets.TextAreaInput(
-    name="📡 INCOMING SENSOR DATA",
-    value=f"[SYSTEM] {WAITING_FOR_DATA}\n",
-    height=220,
+    name="",
+    value=f"Initializing sensor network...\n",
+    height=200,
     disabled=True,
     sizing_mode="stretch_width",
 )
@@ -665,32 +532,30 @@ incoming_log.styles = {
     "border-radius": "8px",
     "color": ACCENT_LIME,
     "font-family": "'Courier New', monospace",
-    "font-size": "11px",
+    "font-size": "12px",
     "font-weight": "500",
-    "letter-spacing": "0.5px",
 }
 
 
 def log_incoming(entry: str) -> None:
-    """Add a new line at the top of the incoming log."""
+    """Add a new line to the incoming log."""
     lines = incoming_log.value.splitlines()
     incoming_log.value = "\n".join([entry] + lines[:MAX_LOG_LINES]) + "\n"
 
 
-btn_clear_logs = pn.widgets.Button(
-    name="🗑️  CLEAR LOGS", button_type="danger", width=150
-)
+btn_clear_logs = pn.widgets.Button(name="CLEAR", button_type="danger", width=100)
 
 btn_clear_logs.styles = {
     "background": "linear-gradient(135deg, rgba(255, 0, 0, 0.2) 0%, rgba(255, 0, 0, 0.1) 100%)",
     "border": "1px solid #ff4444",
     "color": "#ff6666",
+    "font-size": "12px",
 }
 
 
 def on_clear_logs(event: Any) -> None:
     """Clear the incoming log."""
-    incoming_log.value = "[SYSTEM] Logs cleared.\n"
+    incoming_log.value = "Logs cleared.\n"
     logger.info("Logs cleared by user")
 
 
@@ -711,7 +576,7 @@ def on_connect(c: mqtt.Client, userdata: Any, flags: Any, reason_code: int,
     """Handle MQTT connection event."""
     if reason_code == 0:
         sensor_state.update_live("connected", True)
-        display_conn.value = f"⚡ {CONNECTION_OK} — {BROKER}"
+        display_conn.value = f"⚡ ONLINE"
         logger.info(f"Connected to MQTT broker: {BROKER}")
         
         for topic in SENSOR_TOPICS.values():
@@ -719,7 +584,7 @@ def on_connect(c: mqtt.Client, userdata: Any, flags: Any, reason_code: int,
             logger.debug(f"Subscribed to: {topic}")
     else:
         sensor_state.update_live("connected", False)
-        display_conn.value = f"{CONNECTION_FAILED} (code {reason_code})"
+        display_conn.value = f"⚠️ OFFLINE"
         logger.error(f"MQTT connection failed with code {reason_code}")
 
 
@@ -727,12 +592,12 @@ def on_disconnect(c: mqtt.Client, userdata: Any, disconnect_flags: Any = None,
                   reason_code: Any = None, properties: Any = None) -> None:
     """Handle MQTT disconnection event."""
     sensor_state.update_live("connected", False)
-    display_conn.value = f"🔄 {CONNECTION_DISCONNECTED}"
+    display_conn.value = f"🔄 RECONNECTING"
     logger.warning(f"Disconnected from MQTT broker (code {reason_code})")
 
 
 def on_message(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-    """Called every time a new MQTT message arrives from the ESP32."""
+    """Called every time a new MQTT message arrives."""
     try:
         payload = msg.payload.decode().strip()
         topic = msg.topic
@@ -752,7 +617,7 @@ def connect_to_broker() -> None:
         client.connect(BROKER, PORT, keepalive=MQTT_KEEPALIVE)
         client.loop_forever()
     except Exception as e:
-        display_conn.value = f"{CONNECTION_ERROR}: {e}"
+        display_conn.value = f"❌ ERROR"
         logger.error(f"MQTT connection error: {e}")
 
 
@@ -821,14 +686,10 @@ def process_queued_messages() -> None:
             display_time.value = f"🟢 {timestamp}"
             
             sensor_name = topic.split("/")[-1]
-            log_incoming(f"[{timestamp}] >> {sensor_name.upper()}: {payload}")
+            log_incoming(f"{sensor_name.upper()}: {payload}")
             
             if topic == SENSOR_TOPICS["temperature"]:
                 sensor_state.add_reading_batch(timestamp)
-                
-                refresh_trend_card(trend_temp, "temperature")
-                refresh_trend_card(trend_hum, "humidity")
-                refresh_trend_card(trend_lux, "lux")
                 refresh_analog_gauges()
                 refresh_live_charts()
                 refresh_summary_table()
@@ -843,39 +704,19 @@ pn.state.add_periodic_callback(process_queued_messages, period=100)
 
 
 # ─────────────────────────────────────────────────────────────
-# FUTURISTIC LAYOUT — main content area
+# MAIN LAYOUT
 # ─────────────────────────────────────────────────────────────
-
-# Section headers with futuristic styling
-def make_section_header(text: str, emoji: str = "") -> pn.pane.Markdown:
-    """Create a styled section header."""
-    return pn.pane.Markdown(
-        f"## {emoji} {text}",
-        styles={
-            "color": ACCENT_CYAN,
-            "text-shadow": f"0 0 10px {ACCENT_CYAN}",
-            "font-weight": "700",
-            "letter-spacing": "2px",
-            "margin-top": "30px",
-            "margin-bottom": "20px",
-            "font-size": "20px",
-        }
-    )
-
-
 main_content = pn.Column(
     # Hero Section
     pn.Row(
         pn.pane.Markdown(
-            """
-            # ⚡ SOLAR TRACKER COMMAND CENTER ⚡
-            **Real-Time Sensor Network | Futuristic Control Panel**
-            """,
+            "# ⚡ SOLAR TRACKER COMMAND CENTER",
             styles={
                 "color": ACCENT_CYAN,
                 "text-shadow": f"0 0 20px {ACCENT_CYAN}",
                 "font-weight": "800",
                 "text-align": "center",
+                "margin": "0",
             }
         ),
         sizing_mode="stretch_width",
@@ -883,44 +724,77 @@ main_content = pn.Column(
             "background": GRADIENT_HEADER,
             "border-bottom": f"2px solid {ACCENT_CYAN}",
             "border-radius": "12px",
-            "padding": "30px 20px",
+            "padding": "24px 20px",
             "margin-bottom": "30px",
         }
     ),
     
-    # Live Sensor Readings Section
-    make_section_header("LIVE SENSOR READINGS (DIGITAL + ANALOG)", "📊"),
+    # Live Readings Section
+    pn.pane.Markdown(
+        "**LIVE READINGS**",
+        styles={
+            "color": ACCENT_CYAN,
+            "font-weight": "700",
+            "font-size": "16px",
+            "margin-bottom": "15px",
+        }
+    ),
     pn.GridBox(
         card_temp, card_hum, card_lux,
         ncols=3,
         sizing_mode="stretch_width",
-        styles={"gap": "20px"},
+        styles={"gap": "20px", "margin-bottom": "30px"},
     ),
 
-    # Solar Panel Orientation Section
-    make_section_header("SOLAR PANEL ORIENTATION", "🎯"),
+    # Panel Orientation Section
+    pn.pane.Markdown(
+        "**PANEL ORIENTATION**",
+        styles={
+            "color": ACCENT_CYAN,
+            "font-weight": "700",
+            "font-size": "16px",
+            "margin-bottom": "15px",
+        }
+    ),
     pn.GridBox(
         display_servo_h, 
         display_servo_v, 
         ncols=2,
         sizing_mode="stretch_width",
-        styles={"gap": "20px"},
+        styles={"gap": "20px", "margin-bottom": "30px"},
     ),
     
-    # Status Info Row
+    # Status Row
     pn.Row(
         display_time,
         display_conn,
         sizing_mode="stretch_width",
-        styles={"gap": "20px"},
+        styles={"gap": "20px", "margin-bottom": "30px"},
     ),
 
     # Sensor Summary Section
-    make_section_header("SENSOR NETWORK STATUS", "📡"),
+    pn.pane.Markdown(
+        "**SENSOR SUMMARY**",
+        styles={
+            "color": ACCENT_CYAN,
+            "font-weight": "700",
+            "font-size": "16px",
+            "margin-bottom": "15px",
+        }
+    ),
     summary_table,
 
     # Trends Section
-    make_section_header("LIVE TRENDS ANALYSIS", "📈"),
+    pn.pane.Markdown(
+        "**LIVE TRENDS**",
+        styles={
+            "color": ACCENT_CYAN,
+            "font-weight": "700",
+            "font-size": "16px",
+            "margin-top": "30px",
+            "margin-bottom": "15px",
+        }
+    ),
     pn.Row(
         live_chart_temp, 
         live_chart_lux,
@@ -938,40 +812,15 @@ main_content = pn.Column(
 
 
 # ─────────────────────────────────────────────────────────────
-# LAYOUT — sidebar (logs and info)
+# SIDEBAR
 # ─────────────────────────────────────────────────────────────
 sidebar_content = [
     pn.Column(
         pn.Card(
             pn.pane.Markdown(
-                """
-**🔴 DASHBOARD STATUS: LIVE**
-
-This is an advanced telemetry interface displaying real-time data from the ESP32 Solar Tracker system.
-
-**⚙️ System Configuration:**
-- **Broker**: HiveMQ Public (TLS)
-- **Protocol**: MQTT v3.1.1
-- **Refresh Rate**: 100ms
-- **Data Retention**: 20 readings
-
-**📊 Active Sensors:**
-- 🌡 DHT11 (Temperature & Humidity)
-- ☀️ BH1750 (Ambient Light)
-- 🎯 Servo Feedback (Pan & Tilt)
-
-**🎮 Control Mode:**
-- Auto-tracking via LDR feedback
-- Physical buttons on ESP32
-- Real-time telemetry streaming
-
-**✨ Display Mode:**
-- Hybrid Analog/Digital readouts
-- Futuristic half-circle gauge dials
-- Real-time data fusion
-            """
+                "**System Status**\n\nReal-time telemetry from ESP32 Solar Tracker"
             ),
-            title="🖥️ SYSTEM INFO",
+            title="INFO",
             collapsed=False,
             sizing_mode="stretch_width",
             styles={
@@ -982,9 +831,12 @@ This is an advanced telemetry interface displaying real-time data from the ESP32
         ),
         pn.Spacer(height=15),
         pn.Card(
-            incoming_log,
-            pn.Row(btn_clear_logs, sizing_mode="stretch_width"),
-            title="📡 MQTT TELEMETRY STREAM",
+            pn.Column(
+                incoming_log,
+                pn.Row(btn_clear_logs, sizing_mode="stretch_width"),
+                sizing_mode="stretch_width",
+            ),
+            title="TELEMETRY",
             collapsed=False,
             sizing_mode="stretch_width",
             styles={
@@ -999,10 +851,10 @@ This is an advanced telemetry interface displaying real-time data from the ESP32
 
 
 # ─────────────────────────────────────────────────────────────
-# DASHBOARD TEMPLATE
+# DASHBOARD
 # ─────────────────────────────────────────────────────────────
 dashboard = pn.template.FastListTemplate(
-    title="☀️ SOLAR TRACKER COMMAND CENTER ☀️",
+    title="☀️ SOLAR TRACKER",
     accent_base_color=ACCENT_CYAN,
     header_background=DARK_BG,
     theme="dark",
@@ -1012,5 +864,5 @@ dashboard = pn.template.FastListTemplate(
     main=[main_content],
 )
 
-logger.info("✨ Futuristic Dashboard with Analog Gauges initialized — Telemetry system online!")
+logger.info("✨ Dashboard initialized — Telemetry system online!")
 dashboard.show()
