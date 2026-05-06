@@ -2,8 +2,8 @@
 Solar Tracker Dashboard & Telemetry System
 ------------------------------------------
 A real-time monitoring and control dashboard for an ESP32-based solar tracking system.
-Features include live MQTT telemetry ingestion, dynamic analog gauges, rolling data
-trend visualizations, and system status logging.
+Features include live MQTT telemetry ingestion, dynamic analog gauges with digital 
+readouts, rolling data trend visualizations, and system status logging.
 
 Dependencies:
     pip install panel paho-mqtt hvplot pandas bokeh
@@ -54,7 +54,8 @@ PALETTE = {
     "temperature": "#ff6b35",
     "humidity": "#00d9ff",
     "lux": "#00ff41",
-    "servo": "#ff00ff",
+    "pan": "#00d9ff",
+    "tilt": "#00ff41",
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -207,7 +208,6 @@ body {
     background: linear-gradient(180deg, #0a0e27 0%, #0f1535 100%) !important;
     border-right: 1px solid rgba(0, 217, 255, 0.2) !important;
 }
-.pn-indicator-number { font-size: 28pt !important; }
 """
 pn.config.raw_css = [CUSTOM_CSS]
 
@@ -296,6 +296,8 @@ class SensorState:
             "temperature": deque(maxlen=max_readings),
             "humidity": deque(maxlen=max_readings),
             "lux": deque(maxlen=max_readings),
+            "servo_h": deque(maxlen=max_readings),
+            "servo_v": deque(maxlen=max_readings),
         }
         self.live: Dict[str, Any] = {
             "temperature": 0.0,
@@ -314,6 +316,8 @@ class SensorState:
             "temperature": list(self.readings["temperature"]),
             "humidity": list(self.readings["humidity"]),
             "lux": list(self.readings["lux"]),
+            "servo_h": list(self.readings["servo_h"]),
+            "servo_v": list(self.readings["servo_v"]),
         })
     
     def update_live(self, key: str, value: Any) -> None:
@@ -326,6 +330,8 @@ class SensorState:
         self.readings["temperature"].append(self.live["temperature"])
         self.readings["humidity"].append(self.live["humidity"])
         self.readings["lux"].append(self.live["lux"])
+        self.readings["servo_h"].append(self.live["servo_h"])
+        self.readings["servo_v"].append(self.live["servo_v"])
 
 # Instantiate global state and thread-safe messaging queue
 sensor_state = SensorState()
@@ -339,11 +345,15 @@ message_queue: queue.Queue = queue.Queue()
 analog_temp_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 200, PALETTE["temperature"]), sizing_mode="stretch_width", height=180)
 analog_hum_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 100, PALETTE["humidity"]), sizing_mode="stretch_width", height=180)
 analog_lux_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 100, PALETTE["lux"]), sizing_mode="stretch_width", height=180)
+analog_pan_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 360, PALETTE["pan"]), sizing_mode="stretch_width", height=180)
+analog_tilt_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 360, PALETTE["tilt"]), sizing_mode="stretch_width", height=180)
 
 # 2. Digital Readout Panes
 digital_temp = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #ff6b35;'>0.0 °C</h2>", sizing_mode="stretch_width")
 digital_hum = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #00d9ff;'>0.0 %</h2>", sizing_mode="stretch_width")
 digital_lux = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #00ff41;'>0 lux</h2>", sizing_mode="stretch_width")
+digital_pan = pn.pane.HTML(f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['pan']};'>0 °</h2>", sizing_mode="stretch_width")
+digital_tilt = pn.pane.HTML(f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['tilt']};'>0 °</h2>", sizing_mode="stretch_width")
 
 def update_analog_gauge_display(pane: pn.pane.Bokeh, value: float, max_value: float, color: str) -> None:
     pane.object = create_analog_gauge_bokeh(value, max_value, color)
@@ -366,15 +376,14 @@ def make_sensor_card(title: str, color: str, digital_pane: pn.pane.HTML, gauge_p
 card_temp = make_sensor_card("🌡 TEMPERATURE", PALETTE["temperature"], digital_temp, analog_temp_pane)
 card_hum = make_sensor_card("💧 HUMIDITY", PALETTE["humidity"], digital_hum, analog_hum_pane)
 card_lux = make_sensor_card("☀️ LIGHT INTENSITY", PALETTE["lux"], digital_lux, analog_lux_pane)
+card_pan = make_sensor_card("🧭 HORIZONTAL (PAN)", PALETTE["pan"], digital_pan, analog_pan_pane)
+card_tilt = make_sensor_card("📐 VERTICAL (TILT)", PALETTE["tilt"], digital_tilt, analog_tilt_pane)
 
 # 3. Status Indicators
-display_servo_h = pn.indicators.Number(name="HORIZONTAL", value=0, format="{value:.0f}°", font_size="28pt", sizing_mode="stretch_width")
-display_servo_v = pn.indicators.Number(name="VERTICAL", value=0, format="{value:.0f}°", font_size="28pt", sizing_mode="stretch_width")
 display_time = pn.widgets.StaticText(name="LAST READING", value=WAITING_FOR_ESP32, sizing_mode="stretch_width")
 display_conn = pn.widgets.StaticText(name="CONNECTION", value="🔄 Connecting…", sizing_mode="stretch_width")
 
-# Apply uniform styling to status displays
-for display in [display_servo_h, display_servo_v, display_time, display_conn]:
+for display in [display_time, display_conn]:
     display.styles = {
         "background": GRADIENT_CARD,
         "border": f"1px solid {ACCENT_CYAN}",
@@ -386,7 +395,10 @@ for display in [display_servo_h, display_servo_v, display_time, display_conn]:
 
 # 4. Trend Charts
 live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
+live_chart_hum = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
 live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
+live_chart_pan = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
+live_chart_tilt = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
 
 # 5. Data Table
 summary_table = pn.widgets.Tabulator(
@@ -435,13 +447,21 @@ def refresh_analog_gauges() -> None:
     temp = sensor_state.live["temperature"]
     hum = sensor_state.live["humidity"]
     lux = sensor_state.live["lux"]
+    pan = sensor_state.live["servo_h"]
+    tilt = sensor_state.live["servo_v"]
     
+    # Update Digital Readouts
     digital_temp.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['temperature']};'>{temp:.1f} °C</h2>"
     digital_hum.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['humidity']};'>{hum:.1f} %</h2>"
     digital_lux.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['lux']};'>{lux:.0f} lux</h2>"
+    digital_pan.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['pan']};'>{pan:.0f} °</h2>"
+    digital_tilt.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['tilt']};'>{tilt:.0f} °</h2>"
     
+    # Update Analog Arcs
     update_analog_gauge_display(analog_temp_pane, temp + 50, 200, PALETTE["temperature"])
     update_analog_gauge_display(analog_hum_pane, hum, 100, PALETTE["humidity"])
+    update_analog_gauge_display(analog_pan_pane, pan, 360, PALETTE["pan"])
+    update_analog_gauge_display(analog_tilt_pane, tilt, 360, PALETTE["tilt"])
     
     # Scale lux down for the 0-100 gauge visualization
     lux_scaled = min(lux / 1000, 100)
@@ -455,13 +475,24 @@ def refresh_live_charts() -> None:
     try:
         live_chart_temp.object = df.hvplot.line(
             x="time", y="temperature", title="Temperature Trend",
-            xlabel="", ylabel="°C", color=PALETTE["temperature"], 
-            line_width=2, responsive=True, height=250,
+            xlabel="", ylabel="°C", color=PALETTE["temperature"], line_width=2, responsive=True, height=250
+        )
+        live_chart_hum.object = df.hvplot.line(
+            x="time", y="humidity", title="Humidity Trend",
+            xlabel="", ylabel="%", color=PALETTE["humidity"], line_width=2, responsive=True, height=250
         )
         live_chart_lux.object = df.hvplot.area(
             x="time", y="lux", title="Light Intensity Trend",
-            xlabel="", ylabel="lux", color=PALETTE["lux"], 
-            alpha=0.6, line_width=2, responsive=True, height=250,
+            xlabel="", ylabel="lux", color=PALETTE["lux"], alpha=0.6, line_width=2, responsive=True, height=250
+        )
+        # Using step charts for servos as they tend to hold positions
+        live_chart_pan.object = df.hvplot.step(
+            x="time", y="servo_h", title="Horizontal (Pan) Trend",
+            xlabel="", ylabel="°", color=PALETTE["pan"], line_width=2, responsive=True, height=250
+        )
+        live_chart_tilt.object = df.hvplot.step(
+            x="time", y="servo_v", title="Vertical (Tilt) Trend",
+            xlabel="", ylabel="°", color=PALETTE["tilt"], line_width=2, responsive=True, height=250
         )
     except Exception as e:
         logger.error(f"Render pipeline failure: {e}")
@@ -552,11 +583,9 @@ def create_topic_handlers() -> Dict[str, Callable[[str], None]]:
     def handle_servo_h(payload: str) -> None:
         if (v := validate_sensor_value("servo_h", payload)) is not None:
             sensor_state.update_live("servo_h", v)
-            display_servo_h.value = v
     def handle_servo_v(payload: str) -> None:
         if (v := validate_sensor_value("servo_v", payload)) is not None:
             sensor_state.update_live("servo_v", v)
-            display_servo_v.value = v
 
     return {
         SENSOR_TOPICS["temperature"]: handle_temperature,
@@ -634,11 +663,11 @@ main_content = pn.Column(
         styles={"gap": "20px", "margin-bottom": "30px"},
     ),
 
-    # 2. Actuator Status
+    # 2. Actuator Status (Now fully using gauge cards)
     pn.pane.Markdown("**PANEL ORIENTATION**", styles=SECTION_HEADER_STYLE),
-    pn.Row(
-        display_servo_h, display_servo_v, 
-        sizing_mode="stretch_width",
+    pn.GridBox(
+        card_pan, card_tilt, 
+        ncols=2, sizing_mode="stretch_width",
         styles={"gap": "20px", "margin-bottom": "30px"},
     ),
     
@@ -655,7 +684,11 @@ main_content = pn.Column(
 
     # 5. Historical Trends
     pn.pane.Markdown("**LIVE TRENDS**", styles={"color": ACCENT_CYAN, "font-weight": "700", "font-size": "16px", "margin-top": "30px", "margin-bottom": "15px"}),
-    pn.Row(live_chart_temp, live_chart_lux, sizing_mode="stretch_width", styles={"gap": "20px"}),
+    pn.GridBox(
+        live_chart_temp, live_chart_hum, live_chart_lux,
+        live_chart_pan, live_chart_tilt,
+        ncols=2, sizing_mode="stretch_width", styles={"gap": "20px"}
+    ),
     
     sizing_mode="stretch_width",
     styles={"background": DARK_BG, "padding": "30px", "border-radius": "12px"}
@@ -679,7 +712,7 @@ sidebar_content = [
 ]
 
 dashboard = pn.template.FastListTemplate(
-    title="☀️SOLAR TRACKER☀️",
+    title="☀️ SOLAR TRACKER",
     accent_base_color=ACCENT_CYAN,
     header_background=DARK_BG,
     theme="dark", theme_toggle=False, main_max_width="1600px",
