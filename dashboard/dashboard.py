@@ -3,7 +3,7 @@ Solar Tracker Dashboard & Telemetry System
 ------------------------------------------
 A real-time monitoring and control dashboard for an ESP32-based solar tracking system.
 Features include live MQTT telemetry ingestion, dynamic analog gauges with digital 
-readouts, rolling data trend visualizations, and system status logging.
+readouts, combined rolling data trend visualizations, and system status logging.
 
 Dependencies:
     pip install panel paho-mqtt hvplot pandas bokeh
@@ -53,7 +53,7 @@ GRADIENT_CHART = "linear-gradient(180deg, #0a0e27 0%, #15213e 100%)"
 PALETTE = {
     "temperature": "#ff6b35",
     "humidity": "#00d9ff",
-    "lux": "#00ff41",
+    "lux": "#ffcc00",
     "pan": "#00d9ff",
     "tilt": "#00ff41",
 }
@@ -351,7 +351,7 @@ analog_tilt_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 360, PALETTE["tilt
 # 2. Digital Readout Panes
 digital_temp = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #ff6b35;'>0.0 °C</h2>", sizing_mode="stretch_width")
 digital_hum = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #00d9ff;'>0.0 %</h2>", sizing_mode="stretch_width")
-digital_lux = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #00ff41;'>0 lux</h2>", sizing_mode="stretch_width")
+digital_lux = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #ffcc00;'>0 lux</h2>", sizing_mode="stretch_width")
 digital_pan = pn.pane.HTML(f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['pan']};'>0 °</h2>", sizing_mode="stretch_width")
 digital_tilt = pn.pane.HTML(f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['tilt']};'>0 °</h2>", sizing_mode="stretch_width")
 
@@ -393,12 +393,10 @@ for display in [display_time, display_conn]:
         "font-size": "14px",
     }
 
-# 4. Trend Charts
-live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
-live_chart_hum = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
-live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
-live_chart_pan = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
-live_chart_tilt = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
+# 4. Trend Charts (Consolidated Multi-Line)
+live_chart_env = pn.pane.HoloViews(sizing_mode="stretch_width", height=350)
+live_chart_track = pn.pane.HoloViews(sizing_mode="stretch_width", height=350)
+live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=300)
 
 # 5. Data Table
 summary_table = pn.widgets.Tabulator(
@@ -468,31 +466,36 @@ def refresh_analog_gauges() -> None:
     update_analog_gauge_display(analog_lux_pane, lux_scaled, 100, PALETTE["lux"])
 
 def refresh_live_charts() -> None:
-    """Rebuilds the hvplot trend charts using the latest data buffers."""
+    """Rebuilds the hvplot trend charts using combined multi-line plots."""
     df = sensor_state.to_dataframe()
     if len(df) < 2: return
     
     try:
-        live_chart_temp.object = df.hvplot.line(
-            x="time", y="temperature", title="Temperature Trend",
-            xlabel="", ylabel="°C", color=PALETTE["temperature"], line_width=2, responsive=True, height=250
+        # 1. Environment Multi-Line Chart (Temp & Humidity)
+        live_chart_env.object = df.hvplot.line(
+            x="time", y=["temperature", "humidity"], 
+            title="Environment Trends (Temperature & Humidity)",
+            xlabel="", ylabel="Value", 
+            color=[PALETTE["temperature"], PALETTE["humidity"]], 
+            line_width=2, responsive=True, height=350,
+            legend="top_left"
         )
-        live_chart_hum.object = df.hvplot.line(
-            x="time", y="humidity", title="Humidity Trend",
-            xlabel="", ylabel="%", color=PALETTE["humidity"], line_width=2, responsive=True, height=250
+        
+        # 2. Tracking Multi-Line Chart (Pan & Tilt)
+        live_chart_track.object = df.hvplot.step(
+            x="time", y=["servo_h", "servo_v"], 
+            title="Orientation Tracking (Pan & Tilt)",
+            xlabel="", ylabel="Degrees (°)", 
+            color=[PALETTE["pan"], PALETTE["tilt"]], 
+            line_width=2, responsive=True, height=350,
+            legend="top_left"
         )
+
+        # 3. Light Intensity Chart
         live_chart_lux.object = df.hvplot.area(
             x="time", y="lux", title="Light Intensity Trend",
-            xlabel="", ylabel="lux", color=PALETTE["lux"], alpha=0.6, line_width=2, responsive=True, height=250
-        )
-        # Using step charts for servos as they tend to hold positions
-        live_chart_pan.object = df.hvplot.step(
-            x="time", y="servo_h", title="Horizontal (Pan) Trend",
-            xlabel="", ylabel="°", color=PALETTE["pan"], line_width=2, responsive=True, height=250
-        )
-        live_chart_tilt.object = df.hvplot.step(
-            x="time", y="servo_v", title="Vertical (Tilt) Trend",
-            xlabel="", ylabel="°", color=PALETTE["tilt"], line_width=2, responsive=True, height=250
+            xlabel="", ylabel="lux", color=PALETTE["lux"], 
+            alpha=0.6, line_width=2, responsive=True, height=300
         )
     except Exception as e:
         logger.error(f"Render pipeline failure: {e}")
@@ -682,12 +685,13 @@ main_content = pn.Column(
     pn.pane.Markdown("**SENSOR SUMMARY**", styles=SECTION_HEADER_STYLE),
     summary_table,
 
-    # 5. Historical Trends
+    # 5. Historical Trends (Combined Multi-Line Charts)
     pn.pane.Markdown("**LIVE TRENDS**", styles={"color": ACCENT_CYAN, "font-weight": "700", "font-size": "16px", "margin-top": "30px", "margin-bottom": "15px"}),
-    pn.GridBox(
-        live_chart_temp, live_chart_hum, live_chart_lux,
-        live_chart_pan, live_chart_tilt,
-        ncols=2, sizing_mode="stretch_width", styles={"gap": "20px"}
+    pn.Column(
+        live_chart_env, 
+        live_chart_track, 
+        live_chart_lux,
+        sizing_mode="stretch_width", styles={"gap": "20px"}
     ),
     
     sizing_mode="stretch_width",
