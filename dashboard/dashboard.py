@@ -679,7 +679,7 @@ sidebar_content = [
 ]
 
 dashboard = pn.template.FastListTemplate(
-    title="☀️ SOLAR TRACKER",
+    title="☀️SOLAR TRACKER☀️",
     accent_base_color=ACCENT_CYAN,
     header_background=DARK_BG,
     theme="dark", theme_toggle=False, main_max_width="1600px",
