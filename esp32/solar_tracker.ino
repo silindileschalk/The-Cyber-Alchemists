@@ -1,4 +1,4 @@
-// we have to add that thing ye wifi nalento sir did in class i forgot it it starts with a D
+// we have to add that thing ye wifi nalento sir did in class i forgot its name ... it starts with a D
 #include <Wire.h>
 #include <LCD_I2C.h>
 #include <ESP32Servo.h>
