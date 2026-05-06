@@ -288,7 +288,7 @@ def create_analog_gauge_bokeh(value: float, max_value: float, color: str) -> fig
         toolbar_location=None,
         tools="",
         min_border=10,
-        max_border=10,
+        # max_border=10,  <-- REMOVE THIS LINE
         margin=(5, 5, 5, 5)
     )
     
