@@ -382,19 +382,22 @@ analog_temp_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 200, PALETTE["temp
 analog_hum_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 100, PALETTE["humidity"]), sizing_mode="stretch_width", height=180)
 analog_lux_pane = pn.pane.Bokeh(create_analog_gauge_bokeh(0, 100, PALETTE["lux"]), sizing_mode="stretch_width", height=180)
 
+# Create digital text panes to sit above the analog gauges
+digital_temp = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #ff6b35;'>0.0 °C</h2>", sizing_mode="stretch_width")
+digital_hum = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #00d9ff;'>0.0 %</h2>", sizing_mode="stretch_width")
+digital_lux = pn.pane.HTML("<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: #00ff41;'>0 lux</h2>", sizing_mode="stretch_width")
 
 def update_analog_gauge_display(pane: pn.pane.Bokeh, value: float, max_value: float, color: str) -> None:
     """Update analog gauge display."""
     pane.object = create_analog_gauge_bokeh(value, max_value, color)
 
-
 # ─────────────────────────────────────────────────────────────
 # SENSOR CARDS WITH GAUGES
 # ─────────────────────────────────────────────────────────────
-def make_sensor_card(title: str, color: str, gauge_pane: pn.pane.Bokeh) -> pn.Card:
-    """Create a professional sensor card with analog gauge."""
+def make_sensor_card(title: str, color: str, digital_pane: pn.pane.HTML, gauge_pane: pn.pane.Bokeh) -> pn.Card:
+    """Create a professional sensor card with digital reading and analog gauge."""
     card = pn.Card(
-        gauge_pane,
+        pn.Column(digital_pane, gauge_pane, sizing_mode="stretch_width"),
         title=title,
         sizing_mode="stretch_width",
         styles={
@@ -407,10 +410,9 @@ def make_sensor_card(title: str, color: str, gauge_pane: pn.pane.Bokeh) -> pn.Ca
     )
     return card
 
-
-card_temp = make_sensor_card("🌡 TEMPERATURE", PALETTE["temperature"], analog_temp_pane)
-card_hum = make_sensor_card("💧 HUMIDITY", PALETTE["humidity"], analog_hum_pane)
-card_lux = make_sensor_card("☀️ LIGHT INTENSITY", PALETTE["lux"], analog_lux_pane)
+card_temp = make_sensor_card("🌡 TEMPERATURE", PALETTE["temperature"], digital_temp, analog_temp_pane)
+card_hum = make_sensor_card("💧 HUMIDITY", PALETTE["humidity"], digital_hum, analog_hum_pane)
+card_lux = make_sensor_card("☀️ LIGHT INTENSITY", PALETTE["lux"], digital_lux, analog_lux_pane)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -445,16 +447,21 @@ live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=250)
 
 
 def refresh_analog_gauges() -> None:
-    """Update all analog gauges with current sensor values."""
+    """Update all analog gauges and digital displays with current sensor values."""
     temp = sensor_state.live["temperature"]
     hum = sensor_state.live["humidity"]
     lux = sensor_state.live["lux"]
     
+    # Update digital texts
+    digital_temp.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['temperature']};'>{temp:.1f} °C</h2>"
+    digital_hum.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['humidity']};'>{hum:.1f} %</h2>"
+    digital_lux.object = f"<h2 style='text-align: center; margin: 0; padding-top: 10px; font-size: 28px; color: {PALETTE['lux']};'>{lux:.0f} lux</h2>"
+    
+    # Update analog arcs
     update_analog_gauge_display(analog_temp_pane, temp + 50, 200, PALETTE["temperature"])
     update_analog_gauge_display(analog_hum_pane, hum, 100, PALETTE["humidity"])
     lux_scaled = min(lux / 1000, 100)
     update_analog_gauge_display(analog_lux_pane, lux_scaled, 100, PALETTE["lux"])
-
 
 def refresh_live_charts() -> None:
     """Redraw the live hvplot charts."""
