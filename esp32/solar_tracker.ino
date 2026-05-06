@@ -20,11 +20,11 @@ LCD_I2C lcd(0x27, 16, 2);
 DHT11 dht(4);
 BH1750 lightMeter;
 
-Servo servohori;
-Servo servoverti;
+Servo servoHori;
+Servo servoVerti;
 
-int servoh = 90;
-int servov = 90;
+int servoH = 90;
+int servoV = 90;
 
 int tolerance = 50;   //if we want this thing to be more stable the tolerance should be higher ....maybe 80
 
@@ -38,11 +38,11 @@ void setup() {
 
   lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
 
-  servohori.attach(SERVO_H_PIN);
-  servoverti.attach(SERVO_V_PIN);
+  servoHori.attach(SERVO_H_PIN);
+  servoVerti.attach(SERVO_V_PIN);
 
-  servohori.write(servoh);
-  servoverti.write(servov);
+  servoHori.write(servoH);
+  servoVerti.write(servoH);
 
   Serial.println("System Started...");
 
@@ -78,41 +78,44 @@ void loop() {
 
   // HORIZONTAL 
   if (abs(left - right) > 30) {   // yo drugless i changed here from 40 to 30 and it gives a better reaction
-    if (left > right) servoh -= 3; // i also swiped the signs from +=3 to -=3
+    if (left > right) 
+      servoh -= 3; // i also swiped the signs from +=3 to -=3
     else servoh += 3;// did tha same as the one ontop
   }
 
   //  VERTICAL
   if (abs(top - bot) > 30) { // i did the same thing as horizontal
-    if (top > bot) servov += 3;
-    else servov -= 3;
+    if (top > bot){
+      servoV += 3;
+    }
+    else servoV -= 3;
   }
 
   // LIMITS
-  servoh = constrain(servoh, 0, 360);
-  servov = constrain(servov, 0, 360);
+  servoH = constrain(servoH, 0, 360);
+  servoV = constrain(servoV, 0, 360);
 
-  servohori.write(servoh);
+  servohori.write(servoH);
   servoverti.write(servov);
 
   // LCD
   lcd.setCursor(0, 0);
-  lcd.print("lght(LUX):"); //prints in lux not %
+  lcd.print("light(LUX):"); //prints in lux not %
   lcd.print(lux);
   lcd.print("   ");
 
   lcd.setCursor(0, 1);
   lcd.print("H:");
-  lcd.print(servoh);
+  lcd.print(servoH);
   lcd.print(" V:");
-  lcd.print(servov);
+  lcd.print(servoV);
   lcd.print("   ");
 
 int h = dht.readHumidity();
 int t = dht.readTemperature();
 
 if (h == 0 && t == 0) {
-  Serial.println("DHT NOT READING");
+  Serial.println("DHTT NOT READING");
 }
   Serial.print("Temp:");
   Serial.print(t);
