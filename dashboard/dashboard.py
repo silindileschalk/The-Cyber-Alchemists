@@ -1,6 +1,6 @@
 """
 EPG317E — Solar Tracker Dashboard
-Live display + Control Panel with Futuristic UI
+Live display + Control Panel with Futuristic UI + Analog Gauges
 
 Requirements:
     pip install panel paho-mqtt hvplot pandas
@@ -16,9 +16,12 @@ import hvplot.pandas
 import threading
 import logging
 import queue
+import math
 from datetime import datetime
 from collections import deque
 from typing import Optional, Dict, Callable, Tuple, Any
+from bokeh.plotting import figure
+from bokeh.models import Circle, AnnularWedge
 
 # ─────────────────────────────────────────────────────────────
 # LOGGING SETUP
@@ -300,6 +303,68 @@ def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
 
 
 # ─────────────────────────────────────────────────────────────
+# ANALOG GAUGE CREATION
+# ─────────────────────────────────────────────────────────────
+def create_analog_gauge(value: float = 0, max_value: float = 100, 
+                       color: str = ACCENT_CYAN, title: str = "") -> pn.pane.Bokeh:
+    """
+    Create a futuristic half-circle analog gauge using Bokeh.
+    
+    Args:
+        value: Current gauge value
+        max_value: Maximum gauge value
+        color: Gauge color (hex)
+        title: Gauge title
+        
+    Returns:
+        Panel Bokeh pane with the gauge
+    """
+    # Create figure with transparent background
+    p = figure(
+        width=250, height=150,
+        toolbar_location=None,
+        tools="",
+        min_border=0, max_border=0,
+        margin=(0, 0, 0, 0)
+    )
+    
+    # Set background colors
+    p.background_fill_color = None
+    p.border_fill_color = None
+    p.outline_line_color = None
+    p.grid.visible = False
+    p.axis.visible = False
+    
+    # Normalize value to 0-180 degrees (half circle)
+    angle = (value / max_value) * math.pi
+    
+    # Draw background arc (full half circle)
+    background_arc = AnnularWedge(
+        x=0, y=0, inner_radius=0.65, outer_radius=0.85,
+        start_angle=0, end_angle=math.pi,
+        fill_color="#1a1f3a", line_color=ACCENT_CYAN, line_width=2
+    )
+    p.add_glyph(p.renderers[0].data_source if p.renderers else None, background_arc)
+    
+    # Draw value arc (dynamic)
+    value_arc = AnnularWedge(
+        x=0, y=0, inner_radius=0.65, outer_radius=0.85,
+        start_angle=0, end_angle=angle,
+        fill_color=color, line_color=color, line_width=1, alpha=0.8
+    )
+    p.add_glyph(p.renderers[0].data_source if p.renderers else None, value_arc)
+    
+    # Add glow effect circle in center
+    p.circle(x=0, y=0, size=15, fill_color=color, line_color=color, alpha=0.6)
+    
+    # Set axis range
+    p.x_range.start, p.x_range.end = -1, 1
+    p.y_range.start, p.y_range.end = -0.2, 1
+    
+    return pn.pane.Bokeh(p, height=150, sizing_mode="stretch_width")
+
+
+# ─────────────────────────────────────────────────────────────
 # SENSOR STATE CLASS
 # ─────────────────────────────────────────────────────────────
 class SensorState:
@@ -352,10 +417,65 @@ message_queue: queue.Queue = queue.Queue()
 
 
 # ─────────────────────────────────────────────────────────────
-# FUTURISTIC SENSOR TREND CARDS
+# ANALOG GAUGE WIDGETS (DYNAMIC UPDATES)
 # ─────────────────────────────────────────────────────────────
-def make_trend_card(label: str, emoji: str, color: str, chart_style: str = "line") -> Tuple[pn.indicators.Trend, pn.Card]:
-    """Build a futuristic sensor card with neon styling."""
+analog_temp = pn.pane.Bokeh(height=150, sizing_mode="stretch_width")
+analog_hum = pn.pane.Bokeh(height=150, sizing_mode="stretch_width")
+analog_lux = pn.pane.Bokeh(height=150, sizing_mode="stretch_width")
+
+
+def update_analog_gauge(pane: pn.pane.Bokeh, value: float, max_value: float, 
+                       color: str) -> None:
+    """Update an analog gauge with new value."""
+    p = figure(
+        width=250, height=150,
+        toolbar_location=None,
+        tools="",
+        min_border=0, max_border=0,
+        margin=(0, 0, 0, 0)
+    )
+    
+    p.background_fill_color = None
+    p.border_fill_color = None
+    p.outline_line_color = None
+    p.grid.visible = False
+    p.axis.visible = False
+    
+    angle = (value / max_value) * math.pi
+    
+    # Background arc
+    from bokeh.models import ColumnDataSource
+    
+    # Draw arcs using line segments for better control
+    angles_bg = [i * (math.pi / 50) for i in range(51)]
+    x_bg = [0.75 * math.cos(a) for a in angles_bg]
+    y_bg = [0.75 * math.sin(a) for a in angles_bg]
+    
+    p.line(x_bg, y_bg, line_width=12, color=ACCENT_CYAN, alpha=0.2)
+    
+    # Value arc
+    angles_val = [i * (angle / 25) for i in range(26)]
+    x_val = [0.75 * math.cos(a) for a in angles_val]
+    y_val = [0.75 * math.sin(a) for a in angles_val]
+    
+    p.line(x_val, y_val, line_width=12, color=color, alpha=0.9)
+    
+    # Center indicator dot
+    p.circle(x=0, y=0, size=20, fill_color=color, line_color=color, alpha=0.8)
+    
+    p.x_range.start, p.x_range.end = -1, 1
+    p.y_range.start, p.y_range.end = -0.2, 1
+    
+    pane.object = p
+
+
+# ─────────────────────────────────────────────────────────────
+# FUTURISTIC SENSOR TREND CARDS WITH ANALOG GAUGES
+# ─────────────────────────────────────────────────────────────
+def make_trend_card_with_analog(label: str, emoji: str, color: str, 
+                               analog_pane: pn.pane.Bokeh, 
+                               chart_style: str = "line") -> Tuple[pn.indicators.Trend, pn.Card]:
+    """Build a futuristic sensor card with trend and analog gauge."""
     trend = pn.indicators.Trend(
         name=label,
         data={"x": [0], "y": [0]},
@@ -367,8 +487,24 @@ def make_trend_card(label: str, emoji: str, color: str, chart_style: str = "line
         sizing_mode="stretch_width",
     )
     
-    card = pn.Card(
+    # Create composite card with trend on top and analog gauge at bottom right
+    card_content = pn.Column(
         trend,
+        sizing_mode="stretch_width",
+        styles={"height": "100%"}
+    )
+    
+    card = pn.Card(
+        pn.Row(
+            card_content,
+            pn.Column(
+                analog_pane,
+                sizing_mode="stretch_width",
+                styles={"min-width": "250px"}
+            ),
+            sizing_mode="stretch_width",
+            styles={"gap": "10px"}
+        ),
         hide_header=True,
         sizing_mode="stretch_width",
         styles={
@@ -382,9 +518,9 @@ def make_trend_card(label: str, emoji: str, color: str, chart_style: str = "line
     return trend, card
 
 
-trend_temp, card_temp = make_trend_card("🌡 TEMPERATURE", "°C", PALETTE["temperature"], "line")
-trend_hum, card_hum = make_trend_card("💧 HUMIDITY", "%", PALETTE["humidity"], "area")
-trend_lux, card_lux = make_trend_card("☀️ LIGHT INTENSITY", "lux", PALETTE["lux"], "bar")
+trend_temp, card_temp = make_trend_card_with_analog("🌡 TEMPERATURE", "°C", PALETTE["temperature"], analog_temp, "line")
+trend_hum, card_hum = make_trend_card_with_analog("💧 HUMIDITY", "%", PALETTE["humidity"], analog_hum, "area")
+trend_lux, card_lux = make_trend_card_with_analog("☀️ LIGHT INTENSITY", "lux", PALETTE["lux"], analog_lux, "bar")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -431,6 +567,23 @@ def refresh_trend_card(trend_widget: pn.indicators.Trend, sensor_key: str) -> No
     trend_widget.data = {"x": list(range(len(buf))), "y": buf}
     trend_widget.value = round(current, 2)
     trend_widget.value_change = round(pct_change, 4)
+
+
+def refresh_analog_gauges() -> None:
+    """Update all analog gauges with current sensor values."""
+    temp = sensor_state.live["temperature"]
+    hum = sensor_state.live["humidity"]
+    lux = sensor_state.live["lux"]
+    
+    # Temperature: -50 to 150°C
+    update_analog_gauge(analog_temp, temp + 50, 200, PALETTE["temperature"])
+    
+    # Humidity: 0 to 100%
+    update_analog_gauge(analog_hum, hum, 100, PALETTE["humidity"])
+    
+    # Light: 0 to 100000 lux (scaled to 0-100 for display)
+    lux_scaled = min(lux / 1000, 100)
+    update_analog_gauge(analog_lux, lux_scaled, 100, PALETTE["lux"])
 
 
 def refresh_live_charts() -> None:
@@ -676,6 +829,7 @@ def process_queued_messages() -> None:
                 refresh_trend_card(trend_temp, "temperature")
                 refresh_trend_card(trend_hum, "humidity")
                 refresh_trend_card(trend_lux, "lux")
+                refresh_analog_gauges()
                 refresh_live_charts()
                 refresh_summary_table()
     
@@ -735,7 +889,7 @@ main_content = pn.Column(
     ),
     
     # Live Sensor Readings Section
-    make_section_header("LIVE SENSOR READINGS", "📊"),
+    make_section_header("LIVE SENSOR READINGS (DIGITAL + ANALOG)", "📊"),
     pn.GridBox(
         card_temp, card_hum, card_lux,
         ncols=3,
@@ -810,6 +964,11 @@ This is an advanced telemetry interface displaying real-time data from the ESP32
 - Auto-tracking via LDR feedback
 - Physical buttons on ESP32
 - Real-time telemetry streaming
+
+**✨ Display Mode:**
+- Hybrid Analog/Digital readouts
+- Futuristic half-circle gauge dials
+- Real-time data fusion
             """
             ),
             title="🖥️ SYSTEM INFO",
@@ -853,5 +1012,5 @@ dashboard = pn.template.FastListTemplate(
     main=[main_content],
 )
 
-logger.info("✨ Futuristic Dashboard initialized — Telemetry system online!")
+logger.info("✨ Futuristic Dashboard with Analog Gauges initialized — Telemetry system online!")
 dashboard.show()
