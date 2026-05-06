@@ -20,11 +20,11 @@ from collections import deque
 pn.extension("tabulator", sizing_mode="stretch_width", template="fast")
 
 # ─────────────────────────────────────────────────────────────
-# CONFIGURATION  ← change these two lines to match your team
+# CONFIGURATION  
 # ─────────────────────────────────────────────────────────────
 BROKER  = "broker.hivemq.com"
 PORT    = 1883
-TEAM_ID = "team01"          # e.g. "team03"
+TEAM_ID = "TheCyberAlchemists"         
 BASE    = f"epg317e/solar/{TEAM_ID}"
 
 # Topics the ESP32 publishes sensor readings to
