@@ -56,7 +56,7 @@ void setup() {
   
   // came here to instate the Wifi module so ensure you check everything here, this is my first time playing with a esp
   WiFi.begin(Drugless, BuYdaTa80085); // remember to replace these
-  while (WiFi.status()!= WL_CONNECTED // this is just one of those, iof it's not connected say so.
+  while (WiFi.status()!= WL_CONNECTED); // this is just one of those, iof it's not connected say so.
   { 
   delay(500);
   serial.print("searching");
