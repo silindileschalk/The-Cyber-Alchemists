@@ -16,6 +16,11 @@
 #define LDR_LEFT 32
 #define LDR_RIGHT 33
 
+// Defining WiFi values so be sure to change these
+#define SSID "Drugless" // replace my ssid with your own
+#define PASS "BuYdaTa80085" // use your own password there
+const char* server = "websiteWithDashboard.com" // I'm unsure about this line
+
 LCD_I2C lcd(0x27, 16, 2);
 DHT11 dht(4);
 BH1750 lightMeter;
@@ -26,7 +31,7 @@ Servo servoverti;
 int servoh = 90;
 int servov = 90;
 
-int tolerance = 50;   //if we want this thing to be more stable the tolerance should be higher ....maybe 80
+int tolerance = 75;   //I know you said we need this to be atleast 80 for even better stability buh let's try out 75 and see if it's not stable enough... also I think the comment wasa lie/ wrong ... so incase just reset to 50
 
 void setup() {
   Serial.begin(115200);
@@ -48,6 +53,17 @@ void setup() {
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
+  
+  // came here to instate the Wifi module so ensure you check everything here, this is my first time playing with a esp
+  WiFi.begin(Drugless, BuYdaTa80085); // remember to replace these
+  while (WiFi.status()!= WL_CONNECTED); // this is just one of those, iof it's not connected say so.
+  { 
+  delay(500);
+  serial.print("searching");
+  }
+  serial.println(" ");
+  serial.println(" WiFi Connected");
+  serial.println(WiFi.localIP());
 }
 
 void loop() {
@@ -79,7 +95,7 @@ void loop() {
   // HORIZONTAL 
   if (abs(left - right) > 30) {   // yo drugless i changed here from 40 to 30 and it gives a better reaction
     if (left > right) servoh -= 3; // i also swiped the signs from +=3 to -=3
-    else servoh += 3;// did tha same as the one ontop
+    else servoh += 3;// you gotit right?
   }
 
   //  VERTICAL
@@ -89,7 +105,7 @@ void loop() {
   }
 
   // LIMITS
-  servoh = constrain(servoh, 0, 360);
+  servoh = constrain(servoh, 0, 360); // kinda thought the servos are limited to 180 degrees, so we'll alter this incase the PV shakes but I think It will ignore the extra scale
   servov = constrain(servov, 0, 360);
 
   servohori.write(servoh);
@@ -108,7 +124,7 @@ void loop() {
   lcd.print(servov);
   lcd.print("   ");
 
-int h = dht.readHumidity();
+int h = dht.readHumidity(); // how come nothing depends on humidiy?
 int t = dht.readTemperature();
 
 if (h == 0 && t == 0) {
@@ -121,4 +137,7 @@ if (h == 0 && t == 0) {
 
   delay(50); //we changed this from 100 to 50 for faster reaction
   
+}
+// the info we'll tranmit to the dasboard will be here... so what are we plotting exactly? temp, light on which sensor and humidity... 
+void send() { 
 }
