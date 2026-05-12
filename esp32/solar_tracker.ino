@@ -1,4 +1,5 @@
-// we have to add that thing ye wifi nalento sir did in class ... the mqtt 
+# ESP32 MQTT Solar Tracker — Upload Ready
+
 
 #include <Wire.h>
 #include <WiFi.h>
@@ -8,51 +9,172 @@
 #include <DHT11.h>
 #include <BH1750.h>
 
+// =========================
+// PINS
+// =========================
 #define SERVO_H_PIN 18
 #define SERVO_V_PIN 19
 
 #define BUZZER_PIN 15
 #define BUTTON_PIN 2
 
-#define LDR_BOT 34
-#define LDR_TOP 35
-#define LDR_LEFT 32
+#define LDR_BOT   34
+#define LDR_TOP   35
+#define LDR_LEFT  32
 #define LDR_RIGHT 33
 
-// GLOBAL VARIABLES
-bool buzzerState = false;
+#define DHT_PIN 4
 
-int left;
-int right;
-int top;
-int bot;
-
-float lux;
-
-int h;
-int t;
-
-// WIFI
+// =========================
+// WIFI + MQTT
+// =========================
 #define SSID "Drugless"
 #define PASS "BuYdaTa80085"
 
 const char* mqtt_server = "broker.hivemq.com";
+const char* topic = "drugless/solartracker";
 
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+// =========================
+// OBJECTS
+// =========================
 LCD_I2C lcd(0x27, 16, 2);
-DHT11 dht(4);
+DHT11 dht(DHT_PIN);
 BH1750 lightMeter;
 
 Servo servohori;
 Servo servoverti;
+
+// =========================
+// VARIABLES
+// =========================
+bool buzzerState = false;
+
+int left = 0;
+int right = 0;
+int top = 0;
+int bot = 0;
+
+float lux = 0;
+
+int h = 0;
+int t = 0;
 
 int servoh = 90;
 int servov = 90;
 
 int tolerance = 75;
 
+unsigned long lastSend = 0;
+
+// =========================
+// WIFI SETUP
+// =========================
+void setup_wifi() {
+
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(SSID);
+
+  WiFi.begin(SSID, PASS);
+
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi Connected");
+
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// =========================
+// MQTT RECONNECT
+// =========================
+void reconnect() {
+
+  while (!client.connected()) {
+
+    Serial.println("Connecting to MQTT...");
+
+    if (client.connect("DruglessESP32")) {
+
+      Serial.println("MQTT Connected");
+
+    } else {
+
+      Serial.print("MQTT Failed. State: ");
+      Serial.println(client.state());
+
+      delay(2000);
+    }
+  }
+}
+
+// =========================
+// MQTT SEND
+// =========================
+void sendData() {
+
+  String payload = "{";
+
+  payload += "\"left\":" + String(left) + ",";
+  payload += "\"right\":" + String(right) + ",";
+  payload += "\"top\":" + String(top) + ",";
+  payload += "\"bottom\":" + String(bot) + ",";
+
+  payload += "\"lux\":" + String(lux) + ",";
+
+  payload += "\"temperature\":" + String(t) + ",";
+  payload += "\"humidity\":" + String(h) + ",";
+
+  payload += "\"servoH\":" + String(servoh) + ",";
+  payload += "\"servoV\":" + String(servov) + ",";
+
+  payload += "\"buzzer\":";
+
+  if (buzzerState) {
+    payload += "\"ON\"";
+  }
+  else {
+    payload += "\"OFF\"";
+  }
+
+  payload += "}";
+
+  client.publish(topic, payload.c_str());
+
+  Serial.println(payload);
+}
+
+// =========================
+// LDR HEALTH CHECK
+// =========================
+void checkLDRs() {
+
+  bool dead = false;
+
+  if (left <= 5 || left >= 4090) dead = true;
+  if (right <= 5 || right >= 4090) dead = true;
+  if (top <= 5 || top >= 4090) dead = true;
+  if (bot <= 5 || bot >= 4090) dead = true;
+
+  if (dead) {
+
+    buzzerState = true;
+
+    Serial.println("LDR FAILURE DETECTED");
+  }
+}
+
+// =========================
+// SETUP
+// =========================
 void setup() {
 
   Serial.begin(115200);
@@ -73,43 +195,31 @@ void setup() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(BUZZER_PIN, OUTPUT);
 
+  digitalWrite(BUZZER_PIN, LOW);
+
   Serial.println("System Started...");
 
-  // WIFI CONNECTION
-  WiFi.begin(SSID, PASS);
+  setup_wifi();
 
-  Serial.println("Connecting to WiFi");
-
-  while (WiFi.status() != WL_CONNECTED) {
-
-    delay(500);
-
-    Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.println("WiFi Connected");
-
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-
-  // MQTT
   client.setServer(mqtt_server, 1883);
 }
 
+// =========================
+// LOOP
+// =========================
 void loop() {
 
-  // MQTT RECONNECT
+  // MQTT
   if (!client.connected()) {
     reconnect();
   }
 
   client.loop();
 
-  // RESET BUZZER STATE
+  // RESET BUZZER
   buzzerState = false;
 
-  // BUTTON CHECK
+  // BUTTON
   if (digitalRead(BUTTON_PIN) == LOW) {
 
     buzzerState = true;
@@ -128,7 +238,7 @@ void loop() {
   h = dht.readHumidity();
   t = dht.readTemperature();
 
-  // DEBUG PRINT
+  // DEBUG
   Serial.print("L:");
   Serial.print(left);
 
@@ -141,20 +251,14 @@ void loop() {
   Serial.print(" B:");
   Serial.print(bot);
 
-  Serial.print(" | Lux:");
-  Serial.println(lux);
+  Serial.print(" Lux:");
+  Serial.print(lux);
 
   Serial.print(" Temp:");
   Serial.print(t);
 
   Serial.print(" Hum:");
   Serial.println(h);
-
-  // DHT CHECK
-  if (h == 0 && t == 0) {
-
-    Serial.println("DHT NOT READING");
-  }
 
   // HORIZONTAL TRACKING
   if (abs(left - right) > tolerance) {
@@ -178,8 +282,8 @@ void loop() {
     }
   }
 
-  // SERVO LIMITS
-  servoh = constrain(servoh, 0, 360);
+  // LIMITS
+  servoh = constrain(servoh, 0, 180);
   servov = constrain(servov, 0, 180);
 
   // MOVE SERVOS
@@ -190,7 +294,7 @@ void loop() {
   lcd.setCursor(0, 0);
   lcd.print("Lux:");
   lcd.print(lux);
-  lcd.print("   ");
+  lcd.print("    ");
 
   lcd.setCursor(0, 1);
   lcd.print("H:");
@@ -198,98 +302,26 @@ void loop() {
 
   lcd.print(" V:");
   lcd.print(servov);
-  lcd.print("   ");
+  lcd.print("    ");
 
-  // LDR HEALTH CHECK
+  // CHECK LDR HEALTH
   checkLDRs();
 
-  // APPLY BUZZER STATE
+  // APPLY BUZZER
   if (buzzerState) {
-
     digitalWrite(BUZZER_PIN, HIGH);
-
   }
   else {
-
     digitalWrite(BUZZER_PIN, LOW);
   }
 
-  // SEND MQTT DATA
-  send();
+  // SEND MQTT EVERY 2 SECONDS
+  if (millis() - lastSend > 2000) {
 
-  delay(1000);
-}
+    lastSend = millis();
 
-// MQTT SEND FUNCTION
-void send() {
-
-  String payload = "{";
-
-  payload += "\"left\":" + String(left) + ",";
-  payload += "\"right\":" + String(right) + ",";
-  payload += "\"top\":" + String(top) + ",";
-  payload += "\"bottom\":" + String(bot) + ",";
-
-  payload += "\"lux\":" + String(lux) + ",";
-
-  payload += "\"temperature\":" + String(t) + ",";
-  payload += "\"humidity\":" + String(h) + ",";
-
-  payload += "\"servoH\":" + String(servoh) + ",";
-  payload += "\"servoV\":" + String(servov) + ",";
-
-  payload += "\"buzzer\":\"";
-
-  if (buzzerState) {
-    payload += "ON";
-  }
-  else {
-    payload += "OFF";
+    sendData();
   }
 
-  payload += "\"}";
-
-  client.publish("drugless/solartracker", payload.c_str());
-
-  Serial.println(payload);
-}
-
-// LDR DIAGNOSTICS
-void checkLDRs() {
-
-  bool dead = false;
-
-  if (left <= 5 || left >= 4090) dead = true;
-  if (right <= 5 || right >= 4090) dead = true;
-  if (top <= 5 || top >= 4090) dead = true;
-  if (bot <= 5 || bot >= 4090) dead = true;
-
-  if (dead) {
-
-    buzzerState = true;
-
-    Serial.println("LDR FAILURE DETECTED");
-  }
-}
-
-// MQTT RECONNECT
-void reconnect() {
-
-  while (!client.connected()) {
-
-    Serial.println("Connecting to MQTT...");
-
-    if (client.connect("DruglessESP32")) {
-
-      Serial.println("MQTT Connected");
-
-    }
-    else {
-
-      Serial.print("Failed, rc=");
-      Serial.println(client.state());
-
-      delay(2000);
-    }
-  }
+  delay(100);
 }
