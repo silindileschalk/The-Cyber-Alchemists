@@ -18,8 +18,8 @@
 #define LDR_RIGHT 33
 
 // Defining WiFi values so be sure to change these
-#define SSID "Drugless"
-#define PASS "BuYdaTa80085"
+#define SSID "iPhone"
+#define PASS "password1234"
 
 const char* mqtt_server = "broker.hivemq.com";
 
@@ -60,9 +60,9 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   
   // came here to instate the Wifi module so ensure you check everything here, this is my first time playing with a esp
-  WiFi.begin(Drugless, BuYdaTa80085); // remember to replace these
+  WiFi.begin(iPhone, password1234); // remember to replace these...i did
   Serial.println("Connecting to WiFi");
-  while (WiFi.status()!= WL_CONNECTED) // this is just one of those, iof it's not connected say so.
+  while (WiFi.status()!= WL_CONNECTED) // this is just one of those, iof it's not connected say so.....i see that
   { 
   delay(500);
   serial.print("searching");
@@ -118,7 +118,7 @@ void loop() {
 
   // LIMITS
   servoh = constrain(servoh, 0, 360); // kinda thought the servos are limited to 180 degrees, so we'll alter this incase the PV shakes but I think It will ignore the extra scale
-  servov = constrain(servov, 0, 360);
+  servov = constrain(servov, 0, 180);
 
   servohori.write(servoh);
   servoverti.write(servov);
