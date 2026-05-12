@@ -487,7 +487,7 @@ dashboard = pn.template.FastListTemplate(
         pn.pane.Markdown(f"**Broker:** {MQTT_BROKER}"),
         pn.pane.Markdown(f"**Topic:** {TOPIC_BASE}"),],
     main=[pn.pane.Markdown(
-            "# ☀️ Real-Time IoT Solar Monitoring Dashboard"),
+            "# ☀️ Ethrom"),
         pn.Row(
             temperature_indicator,
             humidity_indicator,
