@@ -1,5 +1,6 @@
 // we have to add that thing ye wifi nalento sir did in class ... the mqtt 
 #include <Wire.h>
+#include <PubSubClient.h>
 #include <LCD_I2C.h>
 #include <ESP32Servo.h>
 #include <DHT11.h>
@@ -17,9 +18,13 @@
 #define LDR_RIGHT 33
 
 // Defining WiFi values so be sure to change these
-#define SSID "Drugless" // replace my ssid with your own
-#define PASS "BuYdaTa80085" // use your own password there
-const char* server = "websiteWithDashboard.com" // I'm unsure about this line
+#define SSID "Drugless"
+#define PASS "BuYdaTa80085"
+
+const char* mqtt_server = "broker.hivemq.com";
+
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 LCD_I2C lcd(0x27, 16, 2);
 DHT11 dht(4);
@@ -56,7 +61,8 @@ void setup() {
   
   // came here to instate the Wifi module so ensure you check everything here, this is my first time playing with a esp
   WiFi.begin(Drugless, BuYdaTa80085); // remember to replace these
-  while (WiFi.status()!= WL_CONNECTED); // this is just one of those, iof it's not connected say so.
+  Serial.println("Connecting to WiFi");
+  while (WiFi.status()!= WL_CONNECTED) // this is just one of those, iof it's not connected say so.
   { 
   delay(500);
   serial.print("searching");
@@ -64,7 +70,13 @@ void setup() {
   serial.println(" ");
   serial.println(" WiFi Connected");
   serial.println(WiFi.localIP());
+
+  /*setup_wifi();
+
+  client.setServer(mqtt_server, 1883);
+    */
 }
+
 
 void loop() {
   if (digitalRead(BUTTON_PIN) == LOW) {
@@ -136,8 +148,67 @@ if (h == 0 && t == 0) {
   Serial.println(h);
 
   delay(50); //we changed this from 100 to 50 for faster reaction
+
+  
+  if (!client.connected()) {
+    reconnect();
+  }
+
+  client.loop();
+  send();
+  
   
 }
 // the info we'll tranmit to the dasboard will be here... so what are we plotting exactly? temp, light on which sensor and humidity... 
-void send() { 
+void send() {
+
+  String payload = "{";
+
+  payload += "\"left\":" + String(left) + ",";
+  payload += "\"right\":" + String(right) + ",";
+  payload += "\"top\":" + String(top) + ",";
+  payload += "\"bottom\":" + String(bot) + ",";
+
+  payload += "\"lux\":" + String(lux) + ",";
+
+  payload += "\"temperature\":" + String(t) + ",";
+  payload += "\"humidity\":" + String(h) + ",";
+
+  payload += "\"servoH\":" + String(servoh) + ",";
+  payload += "\"servoV\":" + String(servov) + ",";
+
+  payload += "\"buzzer\":\"";
+
+  if (digitalRead(BUZZER_PIN) == HIGH) {
+    payload += "ON";
+  } 
+  else {
+    payload += "OFF";
+  }
+
+  payload += "\"}";
+
+  client.publish("drugless/solartracker", payload.c_str());
+
+  Serial.println(payload);
 }
+
+void reconnect() {
+
+  while (!client.connected()) {
+
+    Serial.println("Connecting to MQTT...");
+
+    if (client.connect("DruglessESP32")) {
+
+      Serial.println("MQTT Connected");
+
+    } else {
+
+      Serial.print("Failed, rc=");
+      Serial.print(client.state());
+
+      delay(2000);
+    }
+  }
+} //unsure if it works we'll refine it tomorrow, what I did here tonight was waayyy to risky!!
