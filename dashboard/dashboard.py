@@ -2,11 +2,10 @@
 EPG317E — Solar Tracker Dashboard
 Live display + Control Panel + Historical Data
 
-Requirements:
-    pip install panel paho-mqtt hvplot pandas
-
-Run (do NOT use the VS Code play button):
-    py -m panel serve dashboard.py --show
+Quick Start:
+    1. Grab the dependencies: pip install panel paho-mqtt hvplot pandas
+    2. Fire it up from your terminal (standard 'play' won't work for Panel):
+       py -m panel serve dashboard.py --show
 """
 
 import panel as pn
@@ -18,18 +17,20 @@ import sqlite3
 from datetime import datetime, timedelta
 from collections import deque
 
+# Spin up the Panel extension with a dark theme and the 'Fast' template look
 pn.extension("tabulator", sizing_mode="stretch_width", template="fast")
 
 # ─────────────────────────────────────────────────────────────
-# CONFIGURATION
+# THE CONNECTION SETTINGS
 # ─────────────────────────────────────────────────────────────
+# Make sure TEAM_ID matches whatever you flashed to your ESP32
 BROKER  = "broker.hivemq.com"
 PORT    = 1883
-TEAM_ID = "team01"          # e.g. "team03"
+TEAM_ID = "team01" 
 BASE    = f"epg317e/solar/{TEAM_ID}"
 DB_FILE = "solar_data.db"
 
-# Topics the ESP32 publishes sensor readings to
+# What we're listening for (ESP32 -> Dashboard)
 SENSOR_TOPICS = {
     "temperature" : f"{BASE}/sensors/temperature",
     "humidity"    : f"{BASE}/sensors/humidity",
@@ -40,7 +41,7 @@ SENSOR_TOPICS = {
     "tracking"    : f"{BASE}/control/tracking_mode",
 }
 
-# Topics the dashboard publishes commands to
+# What we're sending out (Dashboard -> ESP32)
 COMMAND_TOPICS = {
     "tracking"  : f"{BASE}/control/tracking_mode",
     "led"       : f"{BASE}/control/led",
@@ -52,10 +53,10 @@ COMMAND_TOPICS = {
 
 
 # ─────────────────────────────────────────────────────────────
-# DATABASE INITIALIZATION
-# Creates the SQLite table if it doesn't exist.
+# SETTING UP THE DATABASE
 # ─────────────────────────────────────────────────────────────
 def init_db():
+    """Builds the local SQLite table if it's the first time running."""
     with sqlite3.connect(DB_FILE) as conn:
         c = conn.cursor()
         c.execute('''
@@ -73,8 +74,10 @@ init_db()
 
 
 # ─────────────────────────────────────────────────────────────
-# ROLLING HISTORY  — keeps the last 20 readings for live charts
+# THE SHORT-TERM MEMORY
 # ─────────────────────────────────────────────────────────────
+# We use deques here so the live charts only show the most recent 20 points.
+# It keeps the dashboard snappy without hogging RAM.
 MAX_READINGS = 20
 
 readings = {
@@ -86,6 +89,7 @@ readings = {
 }
 
 def readings_to_dataframe():
+    """Convert those deques into a format hvPlot understands."""
     return pd.DataFrame({
         "time"        : list(readings["time"]),
         "temperature" : list(readings["temperature"]),
@@ -96,8 +100,9 @@ def readings_to_dataframe():
 
 
 # ─────────────────────────────────────────────────────────────
-# LIVE STATE
+# THE CURRENT STATE OF AFFAIRS
 # ─────────────────────────────────────────────────────────────
+# This dictionary tracks the absolute latest values received over MQTT.
 live = {
     "temperature" : 0.0,
     "humidity"    : 0.0,
@@ -110,10 +115,7 @@ live = {
     "connected"   : False,
 }
 
-
-# ─────────────────────────────────────────────────────────────
-# COLOUR SCHEME
-# ─────────────────────────────────────────────────────────────
+# Branding the UI with specific colors for each metric
 PALETTE = {
     "temperature" : "#0F6E56",   # deep teal
     "humidity"    : "#185FA5",   # ocean blue
@@ -123,9 +125,10 @@ PALETTE = {
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR TREND CARDS
+# BUILDING THE SENSOR CARDS
 # ─────────────────────────────────────────────────────────────
 def make_trend_card(label, color, chart_style="line"):
+    """Creates those nice UI cards with the big numbers and tiny sparklines."""
     trend = pn.indicators.Trend(
         name=label,
         data={"x": [0], "y": [0]},
@@ -149,6 +152,7 @@ def make_trend_card(label, color, chart_style="line"):
     )
     return trend, card
 
+# Instantiate the cards for the top of the page
 trend_temp, card_temp = make_trend_card("🌡 Temperature (°C)", PALETTE["temperature"], "line")
 trend_hum,  card_hum  = make_trend_card("💧 Humidity (%)",     PALETTE["humidity"],    "area")
 trend_lux,  card_lux  = make_trend_card("☀️ Light (lux)",      PALETTE["lux"],         "bar")
@@ -156,8 +160,9 @@ trend_bat,  card_bat  = make_trend_card("🔋 Battery (V)",      PALETTE["batter
 
 
 # ─────────────────────────────────────────────────────────────
-# STATUS DISPLAYS
+# STATUS WIDGETS
 # ─────────────────────────────────────────────────────────────
+# Big numbers for the servo positions and simple text for the connection status
 display_pan  = pn.indicators.Number(name="Pan angle (°)",  value=0, format="{value:.0f}", font_size="28pt")
 display_tilt = pn.indicators.Number(name="Tilt angle (°)", value=0, format="{value:.0f}", font_size="28pt")
 
@@ -167,12 +172,13 @@ display_conn = pn.widgets.StaticText(name="Connection",    value="Connecting to 
 
 
 # ─────────────────────────────────────────────────────────────
-# LIVE CHARTS
+# REAL-TIME CHARTING LOGIC
 # ─────────────────────────────────────────────────────────────
 live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
 live_chart_lux  = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
 
 def refresh_trend_card(trend_widget, sensor_key):
+    """Calculates the percentage change and updates the card visual."""
     buf = list(readings[sensor_key])
     if len(buf) < 2:
         return
@@ -184,6 +190,7 @@ def refresh_trend_card(trend_widget, sensor_key):
     trend_widget.value_change = round(pct_change, 4)
 
 def refresh_live_charts():
+    """Redraws the main central charts using the latest 20 points."""
     df = readings_to_dataframe()
     if len(df) < 2:
         return
@@ -204,8 +211,9 @@ def refresh_live_charts():
 
 
 # ─────────────────────────────────────────────────────────────
-# HISTORICAL CHARTS (SQLITE)
+# DIGGING INTO THE ARCHIVES (SQLITE)
 # ─────────────────────────────────────────────────────────────
+# Let's users look back in time by querying the database file
 time_range_selector = pn.widgets.RadioButtonGroup(
     name='Historical Range',
     options={'1 Hour': 1, '6 Hours': 6, '24 Hours': 24, '7 Days': 168},
@@ -216,7 +224,7 @@ time_range_selector = pn.widgets.RadioButtonGroup(
 historical_chart_pane = pn.Column(sizing_mode="stretch_width")
 
 def refresh_historical_charts(event=None):
-    """Query the SQLite database based on the selected time range and update plots."""
+    """Hits the SQLite DB to pull data for the selected timeframe."""
     hours = time_range_selector.value
     cutoff_time = datetime.now() - timedelta(hours=hours)
     
@@ -231,6 +239,7 @@ def refresh_historical_charts(event=None):
             ]
             return
 
+        # Build the historical plots
         hist_temp = df.hvplot.line(
             x="timestamp", y="temperature",
             title=f"Historical Temperature ({hours}h)",
@@ -251,11 +260,12 @@ def refresh_historical_charts(event=None):
     except Exception as e:
         print(f"[SQLite] Could not load historical data: {e}")
 
+# Watch for when the user clicks a different time range button
 time_range_selector.param.watch(refresh_historical_charts, 'value')
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR SUMMARY TABLE
+# THE "ALL SENSORS" TABLE
 # ─────────────────────────────────────────────────────────────
 summary_table = pn.widgets.Tabulator(
     pd.DataFrame({
@@ -272,6 +282,7 @@ summary_table = pn.widgets.Tabulator(
 )
 
 def refresh_summary_table():
+    """Syncs the spreadsheet-style table with the latest live dict."""
     now = live["last_seen"]
     summary_table.value = pd.DataFrame({
         "Sensor"      : ["Temperature", "Humidity", "Light", "Battery", "Pan", "Tilt", "Tracking"],
@@ -290,8 +301,9 @@ def refresh_summary_table():
 
 
 # ─────────────────────────────────────────────────────────────
-# MQTT LOG
+# KEEPING TRACK OF MQTT TRAFFIC
 # ─────────────────────────────────────────────────────────────
+# Text boxes to see exactly what is flying back and forth
 incoming_log = pn.widgets.TextAreaInput(
     name="📡 Incoming sensor data",
     value="Waiting for data from ESP32...\n",
@@ -330,8 +342,9 @@ btn_clear_logs.on_click(on_clear_logs)
 
 
 # ─────────────────────────────────────────────────────────────
-# CONTROL WIDGETS
+# THE CONTROL PANEL (SIDEBAR)
 # ─────────────────────────────────────────────────────────────
+# Interactive bits to tell the ESP32 what to do
 btn_tracking = pn.widgets.Toggle(
     name="🔄 Auto-tracking: OFF", value=False,
     button_type="success", width=210,
@@ -362,6 +375,7 @@ btn_send_threshold = pn.widgets.Button(
 )
 
 def servo_angle_preview(pan, tilt):
+    """Shows you what angles you're about to send before you click the button."""
     return pn.pane.Markdown(
         f"*Will send →* pan **{pan}°** | tilt **{tilt}°**",
         sizing_mode="stretch_width",
@@ -371,7 +385,7 @@ servo_preview_pane = pn.bind(servo_angle_preview, pan=sl_pan, tilt=sl_tilt)
 
 
 # ─────────────────────────────────────────────────────────────
-# MQTT CLIENT SETUP
+# MQTT BRAINS
 # ─────────────────────────────────────────────────────────────
 try:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -379,6 +393,7 @@ except AttributeError:
     client = mqtt.Client()
 
 def on_connect(c, userdata, flags, reason_code, properties=None):
+    """When we successfully shake hands with the broker, subscribe to everything."""
     if reason_code == 0:
         live["connected"] = True
         display_conn.value = f"✅ Connected to {BROKER}"
@@ -392,10 +407,12 @@ def on_disconnect(c, userdata, disconnect_flags=None, reason_code=None, properti
     display_conn.value = "⚠️ Disconnected — retrying…"
 
 def on_message(c, userdata, msg):
+    """The heavy lifter: processes new data, saves to DB, and updates the UI."""
     try:
         payload = msg.payload.decode().strip()
         topic   = msg.topic
 
+        # Identify which sensor is talking
         if topic == SENSOR_TOPICS["temperature"]:
             live["temperature"] = float(payload)
         elif topic == SENSOR_TOPICS["humidity"]:
@@ -414,21 +431,23 @@ def on_message(c, userdata, msg):
             live["tracking"] = payload
             display_mode.value = payload.upper()
 
+        # Timestamp the arrival
         live["last_seen"] = datetime.now().strftime("%H:%M:%S")
         display_time.value = live["last_seen"]
         sensor_name = topic.split("/")[-1]
         log_incoming(f"[{live['last_seen']}]  {sensor_name}: {payload}")
 
+        # If we got a temperature reading, let's treat that as a full "update cycle"
         if topic == SENSOR_TOPICS["temperature"]:
             
-            # --- 1. Update in-memory rolling list for live charts ---
+            # 1. Update the short-term rolling memory
             readings["time"].append(live["last_seen"])
             readings["temperature"].append(live["temperature"])
             readings["humidity"].append(live["humidity"])
             readings["lux"].append(live["lux"])
             readings["battery"].append(live["battery"])
 
-            # --- 2. Save reading permanently to SQLite ---
+            # 2. Commit the data to the SQLite database for long-term storage
             try:
                 with sqlite3.connect(DB_FILE) as conn:
                     c = conn.cursor()
@@ -440,7 +459,7 @@ def on_message(c, userdata, msg):
             except Exception as db_err:
                 print(f"[SQLite] Insert error: {db_err}")
 
-            # --- 3. Refresh Dashboard UI ---
+            # 3. Refresh all the visual components of the UI
             refresh_trend_card(trend_temp, "temperature")
             refresh_trend_card(trend_hum,  "humidity")
             refresh_trend_card(trend_lux,  "lux")
@@ -457,6 +476,7 @@ client.on_disconnect = on_disconnect
 client.on_message    = on_message
 
 def connect_to_broker():
+    """Run the MQTT loop in its own thread so it doesn't freeze the dashboard UI."""
     try:
         client.connect(BROKER, PORT, keepalive=60)
         client.loop_forever()
@@ -468,9 +488,10 @@ broker_thread.start()
 
 
 # ─────────────────────────────────────────────────────────────
-# CONTROL CALLBACKS
+# BUTTON CLICK HANDLERS
 # ─────────────────────────────────────────────────────────────
 def send_command(topic, payload):
+    """Wrapper to publish MQTT messages only if we're actually connected."""
     if live["connected"]:
         client.publish(topic, str(payload), qos=1)
     else:
@@ -501,6 +522,7 @@ def on_send_threshold(event):
     send_command(COMMAND_TOPICS["threshold"], sl_threshold.value)
     log_outgoing(f"[{datetime.now().strftime('%H:%M:%S')}]  lux threshold → {sl_threshold.value} lx")
 
+# Hook up the UI widgets to the logic functions above
 btn_tracking.param.watch(on_tracking_toggle, "value")
 btn_led.param.watch(on_led_toggle, "value")
 btn_buzzer.on_click(on_buzzer_click)
@@ -509,7 +531,7 @@ btn_send_threshold.on_click(on_send_threshold)
 
 
 # ─────────────────────────────────────────────────────────────
-# LAYOUT — main content area
+# ASSEMBLING THE MAIN DASHBOARD VIEW
 # ─────────────────────────────────────────────────────────────
 main_content = pn.Column(
     pn.pane.Markdown("## Live Sensor Readings"),
@@ -534,7 +556,6 @@ main_content = pn.Column(
     pn.pane.Markdown("## Live Trends — last 20 readings"),
     pn.Row(live_chart_temp, live_chart_lux),
     
-    # New section for Historical Data querying SQLite
     pn.pane.Markdown("## Historical Data"),
     pn.Row(pn.pane.Markdown("**Select Range:**", margin=(10, 10, 0, 0)), time_range_selector),
     historical_chart_pane,
@@ -542,7 +563,7 @@ main_content = pn.Column(
 
 
 # ─────────────────────────────────────────────────────────────
-# LAYOUT — sidebar
+# ASSEMBLING THE SIDEBAR CONTROLS
 # ─────────────────────────────────────────────────────────────
 sidebar_content = [
     pn.Column(
@@ -588,9 +609,9 @@ sidebar_content = [
 
 
 # ─────────────────────────────────────────────────────────────
-# DASHBOARD TEMPLATE
+# FINAL ASSEMBLY & LAUNCH
 # ─────────────────────────────────────────────────────────────
-# Initialize charts once before showing the template
+# Run an initial check on the historical charts so they aren't blank on boot
 refresh_historical_charts()
 
 dashboard = pn.template.FastListTemplate(
@@ -604,4 +625,5 @@ dashboard = pn.template.FastListTemplate(
     main=[main_content],
 )
 
+# Open it up!
 dashboard.show()
