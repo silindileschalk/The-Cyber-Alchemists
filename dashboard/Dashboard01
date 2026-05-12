@@ -1,0 +1,507 @@
+import matplotlib
+matplotlib.use("agg")
+
+import sqlite3
+from datetime import datetime
+import holoviews as hv
+import hvplot.pandas
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import paho.mqtt.client as mqtt
+import panel as pn
+
+hv.extension("bokeh")
+
+pn.extension("tabulator",
+    sizing_mode="stretch_width",)
+
+conn = sqlite3.connect(
+    "solar_dashboard.db",
+    check_same_thread=False,)
+
+cursor = conn.cursor()
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS sensor_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp TEXT,
+        sensor TEXT,
+        value REAL)""")
+
+conn.commit()
+
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 1883
+TOPIC_BASE = "epg317e/the_cyber_alchemists/smart_solar_tracker"
+
+latest_data = {"temperature": 0,
+    "humidity": 0,
+    "lux": 0,
+    "battery": 0,
+    "pan": 90,
+    "tilt": 90,}
+
+history_data = pd.DataFrame(
+    columns=[
+        "timestamp",
+        "temperature",
+        "humidity",
+        "lux",
+        "battery",
+        "pan",
+        "tilt",])
+
+MAX_HISTORY = 300
+
+def insert_data(sensor, value):
+    cursor.execute("""
+        INSERT INTO sensor_data (
+            timestamp,
+            sensor,
+            value)
+        VALUES (?, ?, ?)
+        """,
+        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            sensor,
+            value,),)
+
+    conn.commit()
+
+def on_connect(client, userdata, flags, rc):
+    print(f"Connected to MQTT Broker: {rc}")
+
+    client.subscribe(f"{TOPIC_BASE}/#")
+
+def on_message(client, userdata, msg):
+    global history_data
+
+    topic = msg.topic
+    payload = msg.payload.decode()
+
+    try:
+        value = float(payload)
+
+        sensor = topic.split("/")[-1]
+
+        if sensor in latest_data:
+            latest_data[sensor] = value
+
+            insert_data(sensor, value)
+
+            row = {"timestamp": datetime.now(),
+                "temperature": latest_data["temperature"],
+                "humidity": latest_data["humidity"],
+                "lux": latest_data["lux"],
+                "battery": latest_data["battery"],
+                "pan": latest_data["pan"],
+                "tilt": latest_data["tilt"],}
+
+            history_data = pd.concat(
+                [
+                    history_data,
+                    pd.DataFrame([row]),
+                ],
+                ignore_index=True,)
+
+            history_data = history_data.tail(MAX_HISTORY)
+
+    except ValueError:
+        print("Invalid MQTT payload")
+
+client = mqtt.Client()
+
+client.on_connect = on_connect
+client.on_message = on_message
+
+client.connect(
+    MQTT_BROKER,
+    MQTT_PORT,
+    60,)
+
+client.loop_start()
+
+PANEL_SPECS = {"Monocrystalline": {
+        "Isc": 9.5,
+        "Voc": 40.0,
+        "eff": 0.21,
+        "temp_coeff_v": -0.0030,
+        "temp_coeff_i": 0.0005,},
+    "Polycrystalline": {
+        "Isc": 9.0,
+        "Voc": 37.5,
+        "eff": 0.17,
+        "temp_coeff_v": -0.0035,
+        "temp_coeff_i": 0.0005,},
+    "Thin-Film (CdTe)": {
+        "Isc": 5.5,
+        "Voc": 85.0,
+        "eff": 0.13,
+        "temp_coeff_v": -0.0025,
+        "temp_coeff_i": 0.0004,},}
+
+def compute_iv_curve(
+    panel_type,
+    irradiance,
+    temperature,
+    n_points=200,
+):
+    specs = PANEL_SPECS[panel_type]
+
+    g_ratio = irradiance / 1000.0
+    delta_t = temperature - 25.0
+
+    isc = (specs["Isc"]* g_ratio* (1 + specs["temp_coeff_i"] * delta_t))
+
+    voc = (specs["Voc"]* (1 + specs["temp_coeff_v"] * delta_t))
+
+    if g_ratio > 0.01:
+        voc += 0.5 * np.log(g_ratio)
+    else:
+        voc = 0
+        isc = 0
+
+    voc = max(voc, 0)
+    isc = max(isc, 0)
+
+    voltage = np.linspace(0, voc, n_points)
+
+    if voc > 0 and isc > 0:
+        a_value = voc / np.log(isc / 0.001 + 1)
+
+        current = isc * (
+            1 - np.exp((voltage - voc) / a_value))
+
+        current = np.clip(current, 0, None)
+
+    else:
+        current = np.zeros_like(voltage)
+
+    power = voltage * current
+
+    idx = np.argmax(power)
+
+    metrics = {"Voc": voc,
+        "Isc": isc,
+        "Vmpp": voltage[idx],
+        "Impp": current[idx],
+        "Pmpp": power[idx],
+        "fill_factor": (
+            power[idx] / (voc * isc)
+            if voc * isc
+            else 0),
+        "efficiency": (
+            (power[idx] / (irradiance * 1.7)) * 100
+            if irradiance > 0
+            else 0),}
+
+    return voltage, current, power, metrics
+
+w_system_name = pn.widgets.TextInput(
+    name="System Name",
+    value="The Cyber Alchemists Solar Tracker",)
+
+w_panel_type = pn.widgets.Select(
+    name="Panel Technology",
+    options=list(PANEL_SPECS.keys()),
+    value="Monocrystalline",)
+
+w_num_panels = pn.widgets.IntInput(
+    name="Number of Panels",
+    value=10,)
+
+w_plot_mode = pn.widgets.RadioButtonGroup(
+    name="Plot Mode",
+    options=[
+        "I-V Curve",
+        "P-V Curve",
+        "Both",
+    ],
+    value="Both",)
+
+w_show_mpp = pn.widgets.Checkbox(
+    name="Show Maximum Power Point",
+    value=True,)
+
+w_show_stc = pn.widgets.Checkbox(
+    name="Show STC Reference Curve",
+    value=False,)
+
+btn_led = pn.widgets.Button(
+    name="Toggle LED",
+    button_type="primary",)
+
+btn_buzzer = pn.widgets.Button(
+    name="Trigger Buzzer",
+    button_type="danger",)
+
+slider_pan = pn.widgets.IntSlider(
+    name="Pan Servo",
+    start=0,
+    end=180,
+    value=90,)
+
+slider_tilt = pn.widgets.IntSlider(
+    name="Tilt Servo",
+    start=0,
+    end=180,
+    value=90,)
+
+def send_command(topic, value):
+    client.publish(
+        f"{TOPIC_BASE}/control/{topic}",
+        str(value),)
+
+btn_led.on_click(
+    lambda event: send_command("led", 1))
+
+btn_buzzer.on_click(
+    lambda event: send_command("buzzer", 1))
+
+slider_pan.param.watch(
+    lambda event: send_command("pan", event.new),
+    "value",)
+
+slider_tilt.param.watch(
+    lambda event: send_command("tilt", event.new),
+    "value",)
+
+temperature_indicator = pn.indicators.Gauge(
+    name="🌡️ Temperature",
+    value=0,
+    bounds=(0, 60),)
+
+humidity_indicator = pn.indicators.Gauge(
+    name="💧 Humidity",
+    value=0,
+    bounds=(0, 100),)
+
+lux_indicator = pn.indicators.Gauge(
+    name="☀️ Light Intensity",
+    value=0,
+    bounds=(0, 2000),)
+
+battery_indicator = pn.indicators.Gauge(
+    name="🔋 Battery",
+    value=0,
+    bounds=(0, 15),)
+
+live_table = pn.widgets.Tabulator(
+    pd.DataFrame(),
+    height=280,)
+
+performance_table = pn.widgets.Tabulator(
+    pd.DataFrame(),
+    height=280,)
+
+def update_indicators():
+    temperature_indicator.value = latest_data["temperature"]
+    humidity_indicator.value = latest_data["humidity"]
+    lux_indicator.value = latest_data["lux"]
+    battery_indicator.value = latest_data["battery"]
+
+def update_live_table():
+    temp = latest_data["temperature"]
+    humidity = latest_data["humidity"]
+    lux = latest_data["lux"]
+    battery = latest_data["battery"]
+
+    live_table.value = pd.DataFrame(
+        {"Sensor": [
+                "Temperature",
+                "Humidity",
+                "Light Intensity",
+                "Battery Voltage",
+                "Pan Angle",
+                "Tilt Angle",],
+            "Value": [f"{temp:.2f} °C",
+                f"{humidity:.2f} %",
+                f"{lux:.2f} lux",
+                f"{battery:.2f} V",
+                f"{latest_data['pan']}°",
+                f"{latest_data['tilt']}°",],
+            "Status": ["OK" if temp < 45 else "HIGH",
+                "OK" if 30 <= humidity <= 70 else "CHECK",
+                "GOOD" if lux > 500 else "LOW",
+                "GOOD" if battery > 11 else "LOW",
+                "ACTIVE",
+                "ACTIVE",],})
+
+def update_performance_table():
+    irradiance = max(latest_data["lux"], 1)
+
+    temperature = latest_data["temperature"]
+
+    _, _, _, metrics = compute_iv_curve(
+        w_panel_type.value,
+        irradiance,
+        temperature,)
+
+    total_power = metrics["Pmpp"] * w_num_panels.value
+
+    performance_table.value = pd.DataFrame(
+        {"Metric": ["Open Circuit Voltage",
+                "Short Circuit Current",
+                "Maximum Power Voltage",
+                "Maximum Power Current",
+                "Panel Power",
+                "Total System Power",
+                "Efficiency",
+                "Fill Factor",],
+            "Value": [f"{metrics['Voc']:.2f} V",
+                f"{metrics['Isc']:.2f} A",
+                f"{metrics['Vmpp']:.2f} V",
+                f"{metrics['Impp']:.2f} A",
+                f"{metrics['Pmpp']:.2f} W",
+                f"{total_power:.2f} W",
+                f"{metrics['efficiency']:.2f} %",
+                f"{metrics['fill_factor']:.2f}",],})
+
+def create_environment_plot():
+    if history_data.empty:
+        return hv.Curve([])
+
+    return history_data.hvplot.line(
+        x="timestamp",
+        y=["temperature", "humidity"],
+        title="Live Temperature and Humidity",
+        responsive=True,
+        height=350,
+        line_width=2,
+        legend="top_left",)
+
+def create_lux_plot():
+    if history_data.empty:
+        return hv.Curve([])
+
+    return history_data.hvplot.line(
+        x="timestamp",
+        y="lux",
+        title="Live Light Intensity",
+        responsive=True,
+        height=350,
+        line_width=2,)
+
+def create_battery_plot():
+    if history_data.empty:
+        return hv.Curve([])
+
+    return history_data.hvplot.line(
+        x="timestamp",
+        y="battery",
+        title="Live Battery Voltage",
+        responsive=True,
+        height=350,
+        line_width=2,)
+
+def create_iv_pv_plot():
+    irradiance = max(latest_data["lux"], 1)
+
+    temperature = latest_data["temperature"]
+
+    voltage, current, power, metrics = compute_iv_curve(
+        w_panel_type.value,
+        irradiance,
+        temperature,)
+
+    iv_df = pd.DataFrame(
+        {"Voltage": voltage,
+            "Current": current,})
+
+    pv_df = pd.DataFrame(
+        {"Voltage": voltage,
+            "Power": power,})
+
+    iv_curve = iv_df.hvplot.line(
+        x="Voltage",
+        y="Current",
+        title="I-V Curve",
+        responsive=True,
+        height=400,
+        line_width=3,)
+
+    pv_curve = pv_df.hvplot.line(
+        x="Voltage",
+        y="Power",
+        title="P-V Curve",
+        responsive=True,
+        height=400,
+        line_width=3,)
+
+    if w_show_mpp.value:
+        iv_curve *= hv.Points(
+            [(metrics["Vmpp"], metrics["Impp"])]
+        ).opts(size=10)
+
+        pv_curve *= hv.Points(
+            [(metrics["Vmpp"], metrics["Pmpp"])]
+        ).opts(size=10)
+
+    if w_plot_mode.value == "I-V Curve":
+        return iv_curve
+
+    if w_plot_mode.value == "P-V Curve":
+        return pv_curve
+
+    return (iv_curve + pv_curve).cols(2)
+
+environment_plot = pn.bind(create_environment_plot)
+
+lux_plot = pn.bind(create_lux_plot)
+
+battery_plot = pn.bind(create_battery_plot)
+
+iv_pv_plot = pn.bind(create_iv_pv_plot)
+
+pn.state.add_periodic_callback(
+    update_indicators,
+    1000,)
+
+pn.state.add_periodic_callback(
+    update_live_table,
+    1000,)
+
+pn.state.add_periodic_callback(
+    update_performance_table,
+    1000,)
+
+dashboard = pn.template.FastListTemplate(
+    title="☀️ The Cyber Alchemists Solar Tracker",
+    accent_base_color="#2ecc71",
+    header_background="#1f2937",
+    sidebar=[pn.pane.Markdown("## ⚙️ System Configuration"),
+        w_system_name,
+        w_panel_type,
+        w_num_panels,
+        pn.pane.Markdown("## 📈 Curve Display"),
+        w_plot_mode,
+        w_show_mpp,
+        w_show_stc,
+        pn.pane.Markdown("## 🎮 ESP32 Controls"),
+        btn_led,
+        btn_buzzer,
+        slider_pan,
+        slider_tilt,
+        pn.pane.Markdown("---"),
+        pn.pane.Markdown("## 📡 MQTT Information"),
+        pn.pane.Markdown(f"**Broker:** {MQTT_BROKER}"),
+        pn.pane.Markdown(f"**Topic:** {TOPIC_BASE}"),],
+    main=[pn.pane.Markdown(
+            "# ☀️ Real-Time IoT Solar Monitoring Dashboard"),
+        pn.Row(
+            temperature_indicator,
+            humidity_indicator,
+            lux_indicator,
+            battery_indicator,),
+        pn.Row(environment_plot),
+        pn.Row(
+            lux_plot,
+            battery_plot,),
+        pn.pane.Markdown("## 📉 Solar Panel Characteristics"),
+        pn.Row(iv_pv_plot),
+        pn.Row(
+            performance_table,
+            live_table,),],)
+
+dashboard.servable() 
+dashboard.show()
