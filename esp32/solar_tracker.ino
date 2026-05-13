@@ -68,6 +68,9 @@ int  servoV    = 45;
 int  tolerance = 25;
 bool autoMode  = true;
 bool ledState  = false;
+// added for lcd.
+bool lcdOn = true;
+bool lastButtonState = HIGH;
 
 unsigned long lastPublish   = 0;
 unsigned long lastReconnect = 0;
@@ -177,7 +180,7 @@ void setup() {
   delay(500);
 
   // Pins
-  pinMode(BUTTON, INPUT);
+  pinMode(BUTTON, INPUT_PULLUP);
   pinMode(BUZZER, OUTPUT);
   pinMode(LED, OUTPUT);
   digitalWrite(BUZZER, LOW);   
@@ -225,9 +228,8 @@ void setup() {
   Serial.println("System ready for communication.");
 }
 
-// ─────────────────────────────────────────────────────────────
 // LOOP
-// ─────────────────────────────────────────────────────────────
+
 void loop() {
   // MQTT keepalive + non-blocking reconnect
   if (!mqttClient.connected()) {
@@ -239,16 +241,38 @@ void loop() {
   }
   mqttClient.loop();
 
-  // Physical button triggers the buzzer
-  bool buttonStatus = digitalRead(BUTTON);
-  if (buttonStatus == LOW)
-  {
-    digitalWrite(BUZZER, LOW);
-  } 
+  // WiFi disconnected, buzzer screams
 
-  else {
+if (WiFi.status() != WL_CONNECTED)
+{
     digitalWrite(BUZZER, HIGH);
-  }
+}
+else
+{
+    digitalWrite(BUZZER, LOW);
+}
+  // lcd on/off
+bool buttonState = digitalRead(BUTTON);
+
+if (buttonState == LOW && lastButtonState == HIGH)
+{
+    lcdOn = !lcdOn;
+
+    if (lcdOn)
+    {
+        lcd.backlight();
+        Serial.println("LCD ON");
+    }
+    else
+    {
+        lcd.noBacklight();
+        Serial.println("LCD OFF");
+    }
+
+    delay(200); // debounce
+}
+
+lastButtonState = buttonState;
 
   // ── Read sensors ────────────────────────────────────────────
   float lux = lightMeter.readLightLevel();
@@ -274,18 +298,25 @@ void loop() {
     "L:%d R:%d T:%d B:%d | Lux:%.1f | T:%d H:%d | Bat:%.2fV\n",
     left, right, top, bot, lux, tempReading, humReading, battery);
 
-  // ── Auto tracking ───────────────────────────────────────────
+  // Auto mode
   if (autoMode) {
-    // Horizontal
-    if (abs(left - right) > tolerance) {
-      if (left > right) {
-        servoH -= 3;
-      } 
-      else {
-        servoH += 3;   // FIX: was "servoh" (wrong case)
-      }
-    }
+   
 
+// LEFT is brighter than the rest
+if ((left > right) && (left > top) && (abs(left - right) > tolerance))
+{
+    servoH = 0;
+}
+// RIGHT
+else if ((right > left) && (right > top) && (abs(left - right) > tolerance))
+{
+    servoH = 180;
+}
+// TOP is the brightest
+else
+{
+    servoH = 90;
+}
     // Vertical
     if (abs(top - bot) > tolerance) {   // FIX: was outside autoMode block
       if (top > bot) {
@@ -298,7 +329,6 @@ void loop() {
     else {
       servoV = 0;
     }
-
     // Enforce servo angle limits, then write
     servoH = constrain(servoH, 0, 180);  
     servoV = constrain(servoV, 0, 90);   
@@ -324,7 +354,7 @@ void loop() {
   lcd.print(tempReading);
   lcd.print("   ");
 
-  // ── Publish to MQTT every PUBLISH_MS ────────────────────────
+  // 
   unsigned long now = millis();
   if (now - lastPublish >= PUBLISH_MS) {
     lastPublish = now;
