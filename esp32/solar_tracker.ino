@@ -9,8 +9,8 @@
 #include <BH1750.h>
 #include <WiFiClientSecure.h>
 
-const char* WIFI_SSID     = "The Cyber Alchemists IoT";
-const char* WIFI_PASSWORD = "Cy13ER123";          
+const char* WIFI_SSID     = "Ethrom";
+const char* WIFI_PASSWORD = "password";          
 
 // ─────────────────────────────────────────────────────────────
 // MQTT CONFIG — must match dashboard_v4.py exactly
@@ -68,6 +68,13 @@ int  servoV    = 45;
 int  tolerance = 25;
 bool autoMode  = true;
 bool ledState  = false;
+// added for lcd.
+bool lcdOn = true;
+bool lastButtonState = HIGH;
+// smoothing vars
+unsigned long lastServoUpdate = 0;
+const long SERVO_UPDATE_MS = 50;   // update every 50 ms
+const int STEP_SIZE = 2;           // degrees per update
 
 unsigned long lastPublish   = 0;
 unsigned long lastReconnect = 0;
@@ -168,7 +175,17 @@ void connectMQTT() {
     lcd.print("MQTT: FAILED    ");
   }
 }
-
+// Smooth movement helper
+void moveServoSmooth(Servo &servo, int &currentAngle, int targetAngle) {
+  if (currentAngle < targetAngle) {
+    currentAngle += STEP_SIZE;
+    if (currentAngle > targetAngle) currentAngle = targetAngle;
+  } else if (currentAngle > targetAngle) {
+    currentAngle -= STEP_SIZE;
+    if (currentAngle < targetAngle) currentAngle = targetAngle;
+  }
+  servo.write(currentAngle);
+}
 // ─────────────────────────────────────────────────────────────
 // SETUP
 // ─────────────────────────────────────────────────────────────
@@ -177,7 +194,7 @@ void setup() {
   delay(500);
 
   // Pins
-  pinMode(BUTTON, INPUT);
+  pinMode(BUTTON, INPUT_PULLUP);
   pinMode(BUZZER, OUTPUT);
   pinMode(LED, OUTPUT);
   digitalWrite(BUZZER, LOW);   
@@ -225,9 +242,8 @@ void setup() {
   Serial.println("System ready for communication.");
 }
 
-// ─────────────────────────────────────────────────────────────
 // LOOP
-// ─────────────────────────────────────────────────────────────
+
 void loop() {
   // MQTT keepalive + non-blocking reconnect
   if (!mqttClient.connected()) {
@@ -239,16 +255,38 @@ void loop() {
   }
   mqttClient.loop();
 
-  // Physical button triggers the buzzer
-  bool buttonStatus = digitalRead(BUTTON);
-  if (buttonStatus == LOW)
-  {
-    digitalWrite(BUZZER, LOW);
-  } 
+  // WiFi disconnected, buzzer screams
 
-  else {
+if (WiFi.status() != WL_CONNECTED)
+{
     digitalWrite(BUZZER, HIGH);
-  }
+}
+else
+{
+    digitalWrite(BUZZER, LOW);
+}
+  // lcd on/off
+bool buttonState = digitalRead(BUTTON);
+
+if (buttonState == LOW && lastButtonState == HIGH)
+{
+    lcdOn = !lcdOn;
+
+    if (lcdOn)
+    {
+        lcd.backlight();
+        Serial.println("LCD ON");
+    }
+    else
+    {
+        lcd.noBacklight();
+        Serial.println("LCD OFF");
+    }
+
+    delay(200); // debounce
+}
+
+lastButtonState = buttonState;
 
   // ── Read sensors ────────────────────────────────────────────
   float lux = lightMeter.readLightLevel();
@@ -273,40 +311,46 @@ void loop() {
   Serial.printf(
     "L:%d R:%d T:%d B:%d | Lux:%.1f | T:%d H:%d | Bat:%.2fV\n",
     left, right, top, bot, lux, tempReading, humReading, battery);
+// Auto
+// Decide target angles based on LDRs 
+int targetH = servoH;
+int targetV = servoV;
 
-  // ── Auto tracking ───────────────────────────────────────────
-  if (autoMode) {
-    // Horizontal
-    if (abs(left - right) > tolerance) {
-      if (left > right) {
-        servoH -= 3;
-      } 
-      else {
-        servoH += 3;   // FIX: was "servoh" (wrong case)
-      }
-    }
+// Horizontal decision
+if ((left > right) && (left > top) && (abs(left - right) > tolerance)) {
+    targetH = 0;
+} else if ((right > left) && (right > top) && (abs(left - right) > tolerance)) {
+    targetH = 180;
+} else {
+    targetH = 90;
+}
 
-    // Vertical
-    if (abs(top - bot) > tolerance) {   // FIX: was outside autoMode block
-      if (top > bot) {
-        servoV += 3;
-      } 
-      else {
-        servoV -= 3;
-      }
-    }
-    else {
-      servoV = 0;
-    }
+// Vertical decision
+if (abs(top - bot) > tolerance) {
+    if (top > bot) targetV = servoV + 10;  // tilt up
+    else targetV = servoV - 10;            // tilt down
+} else {
+    targetV = servoV; // hold position
+}
+
+// Constrain targets
+targetH = constrain(targetH, 0, 180);
+targetV = constrain(targetV, 0, 90);
+
+// Smoothly move toward targets every SERVO_UPDATE_MS
+unsigned long now = millis();
+if (now - lastServoUpdate >= SERVO_UPDATE_MS) {
+  lastServoUpdate = now;
+  moveServoSmooth(servoHori, servoH, targetH);
+  moveServoSmooth(servoVerti, servoV, targetV);
+}
 
     // Enforce servo angle limits, then write
     servoH = constrain(servoH, 0, 180);  
     servoV = constrain(servoV, 0, 90);   
 
-    servoHori.write(servoH);
-    servoVerti.write(servoV);
   }
-  // In MANUAL mode, servos are moved only by onMessage() above
+  
 
   // ── LCD display ─────────────────────────────────────────────
   lcd.setCursor(0, 0);
@@ -324,8 +368,7 @@ void loop() {
   lcd.print(tempReading);
   lcd.print("   ");
 
-  // ── Publish to MQTT every PUBLISH_MS ────────────────────────
-  unsigned long now = millis();
+  // 
   if (now - lastPublish >= PUBLISH_MS) {
     lastPublish = now;
 
