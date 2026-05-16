@@ -1,4 +1,4 @@
-// The Cyber Alchemists — Solar Tracker Firmware v2
+// The Cyber Alchemists 
 // EPG317E Capstone Project
 #include <WiFi.h>
 #include <PubSubClient.h>
