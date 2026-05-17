@@ -1,363 +1,920 @@
 """
-EPG317E — Solar Tracker Dashboard
-Live display + Control Panel
-
-Requirements:
-    pip install panel paho-mqtt hvplot pandas
-
-Run (do NOT use the VS Code play button):
-    panel serve dashboard.py --show
+EPG317E Capstone Project — Solar Tracker Dashboard (v3)
+The Cyber Alchemists
+--------------------------------------------------------
 """
 
-import panel as pn
-import paho.mqtt.client as mqtt
-import pandas as pd
-import hvplot.pandas
-import threading
-import logging
+import math
 import queue
+import logging
+import threading
 from datetime import datetime
-from collections import deque
-from typing import Optional, Dict, Callable, Tuple, Any
+import ssl
+import sys
+import warnings
+from pathlib import Path
+
+import param
+import pandas as pd
+import panel as pn
+import hvplot.pandas
+import paho.mqtt.client as mqtt
+from bokeh.plotting import figure
+from bokeh.util.warnings import BokehUserWarning
+
 
 # ─────────────────────────────────────────────────────────────
-# LOGGING SETUP
+# DATABASE IMPORT SETUP
+# ─────────────────────────────────────────────────────────────
+currentFilePath = Path(__file__).resolve()
+repoRoot = currentFilePath.parent.parent
+
+databaseFolder = repoRoot / "database"
+if not databaseFolder.exists():
+    databaseFolder = repoRoot / "DatabaseFolder"
+
+sys.path.insert(0, str(databaseFolder))
+
+from database import (
+    store_mqtt_reading,
+    log_command,
+    log_event,
+    load_readings_last_n_hours_to_df,
+)
+
+
+# ─────────────────────────────────────────────────────────────
+# LOGGING & PANEL INIT
 # ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s'
+    format="[%(asctime)s] %(levelname)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-pn.extension("tabulator", sizing_mode="stretch_width", template="fast")
+pn.extension("tabulator", sizing_mode="stretch_width")
+
+warnings.filterwarnings(
+    "ignore",
+    category=BokehUserWarning,
+    message="reference already known"
+)
+
 
 # ─────────────────────────────────────────────────────────────
-# CONSTANTS & CONFIGURATION
+# THEME DEFINITIONS
 # ─────────────────────────────────────────────────────────────
-# MQTT Configuration
-BROKER = "broker.hivemq.com"
-PORT = 1883
+DARK_THEME = {
+    "name": "dark",
+    "bg": "#0a0e27",
+    "card_bg": "linear-gradient(135deg, #0f1535 0%, #1a1f3a 100%)",
+    "header_bg": "#0a0e27",
+    "accent": "#00d9ff",
+    "accent_lime": "#00ff41",
+    "accent_orange": "#ff6b35",
+    "accent_yellow": "#ffcc00",
+    "accent_purple": "#ff00ff",
+    "gauge_track": "#00d9ff",
+    "css": """
+        body {
+            background: linear-gradient(135deg,#0a0e27 0%,#1a1f3a 50%,#0f1535 100%) !important;
+            font-family:'Segoe UI',monospace !important;
+        }
+
+        .pn-card {
+            background:linear-gradient(135deg,#0f1535 0%,#1a1f3a 100%) !important;
+            border:1px solid rgba(0,217,255,0.3) !important;
+            border-radius:12px !important;
+        }
+
+        .bk-root {
+            background:transparent !important;
+        }
+
+        h2,h3 {
+            font-family:'Segoe UI',monospace !important;
+        }
+
+        @media (max-width: 768px) {
+            .pn-GridBox {
+                grid-template-columns: 1fr !important;
+            }
+
+            .bk-GridBox {
+                grid-template-columns: 1fr !important;
+            }
+
+            .bk-btn-group {
+                flex-wrap: wrap !important;
+            }
+
+            .bk-btn-group .bk-btn {
+                flex: 1 1 40% !important;
+                margin: 2px !important;
+            }
+        }
+    """,
+}
+
+LIGHT_THEME = {
+    "name": "light",
+    "bg": "#f0f4ff",
+    "card_bg": "linear-gradient(135deg, #ffffff 30%, #e8eeff 70%)",
+    "header_bg": "#1565c0",
+    "accent": "#1565c0",
+    "accent_lime": "#2e7d32",
+    "accent_orange": "#e65100",
+    "accent_yellow": "#f57f17",
+    "accent_purple": "#6a1b9a",
+    "gauge_track": "#90caf9",
+    "css": """
+        body {
+            background: linear-gradient(135deg,#f0f4ff 50%,#e3eaff 50%,#dce8ff 0%) !important;
+            font-family:'Segoe UI',monospace !important;
+            color:#1a1a2e !important;
+        }
+
+        .pn-card {
+            background:linear-gradient(135deg,#ffffff 0%,#e8eeff 100%) !important;
+            border:1px solid rgba(21,101,192,0.35) !important;
+            border-radius:12px !important;
+        }
+
+        .bk-root {
+            background:transparent !important;
+        }
+
+        h2,h3 {
+            font-family:'Segoe UI',monospace !important;
+            color:#1a1a2e !important;
+        }
+
+        @media (max-width: 768px) {
+            .pn-GridBox {
+                grid-template-columns: 1fr !important;
+            }
+
+            .bk-GridBox {
+                grid-template-columns: 1fr !important;
+            }
+
+            .bk-btn-group {
+                flex-wrap: wrap !important;
+            }
+
+            .bk-btn-group .bk-btn {
+                flex: 1 1 40% !important;
+                margin: 2px !important;
+            }
+        }
+    """,
+}
+
+THEME = DARK_THEME
+pn.config.raw_css = [THEME["css"]]
+
+
+# ─────────────────────────────────────────────────────────────
+# MQTT CONFIG
+# ─────────────────────────────────────────────────────────────
+MQTT_BROKER = "4438a6aa9a8f42ddb3bbbf61da5f9cf5.s1.eu.hivemq.cloud"
+MQTT_PORT = 8883
+MQTT_KEEPALIVE = 60
+MQTT_USERNAME = "Cyber_Alchemy"
+MQTT_PASSWD = "P@ss123456"
+
 TEAM_ID = "TheCyberAlchemists"
 BASE = f"epg317e/solar/{TEAM_ID}"
 
-# Message Queue Configuration
-MESSAGE_QUEUE_TIMEOUT = 0.1  # seconds
-
-# Data Configuration
-MAX_READINGS = 20
-MAX_LOG_LINES = 50
-
-# Connection States
-CONNECTION_OK = "✅ Connected"
-CONNECTION_FAILED = "❌ Connection failed"
-CONNECTION_DISCONNECTED = "⚠️ Disconnected — retrying…"
-CONNECTION_ERROR = "❌ MQTT error"
-WAITING_FOR_DATA = "Waiting for data from ESP32..."
-WAITING_FOR_ESP32 = "Waiting for ESP32…"
-MQTT_KEEPALIVE = 60
-
-# Sensor Bounds for Validation
-SENSOR_BOUNDS = {
-    "temperature": (-50, 150),  # °C
-    "humidity": (0, 100),       # %
-    "lux": (0, 100000),         # lux
-    "servo_h": (0, 360),        # degrees (horizontal pan)
-    "servo_v": (0, 360),        # degrees (vertical tilt)
+BATCH_KEYS = {
+    "temperature",
+    "humidity",
+    "lux",
+    "servo_pan",
+    "servo_tilt",
+    "battery",
 }
 
-# Topics the ESP32 publishes sensor readings to
 SENSOR_TOPICS = {
     "temperature": f"{BASE}/sensors/temperature",
     "humidity": f"{BASE}/sensors/humidity",
     "lux": f"{BASE}/sensors/lux",
-    "servo_h": f"{BASE}/actuators/servo_h",
-    "servo_v": f"{BASE}/actuators/servo_v",
+    "battery": f"{BASE}/sensors/battery",
+    "servo_pan": f"{BASE}/actuators/servo_pan",
+    "servo_tilt": f"{BASE}/actuators/servo_tilt",
 }
 
-# Colour Scheme
-PALETTE = {
-    "temperature": "#0F6E56",   # deep teal
-    "humidity": "#185FA5",      # ocean blue
-    "lux": "#BA7517",           # warm amber
-    "servo": "#E85D75",         # coral pink
+CONTROL_TOPICS = {
+    "tracking_mode": f"{BASE}/control/tracking_mode",
+    "servo_pan": f"{BASE}/control/servo_pan",
+    "servo_tilt": f"{BASE}/control/servo_tilt",
+    "buzzer": f"{BASE}/control/buzzer",
+    "led": f"{BASE}/control/led",
 }
 
 
 # ─────────────────────────────────────────────────────────────
-# UTILITY FUNCTIONS
+# SENSOR STATE
 # ─────────────────────────────────────────────────────────────
-def get_timestamp() -> str:
-    """Get current timestamp in HH:MM:SS format."""
-    return datetime.now().strftime("%H:%M:%S")
+class SensorState(param.Parameterized):
+    temperature = param.Number(default=0.0, bounds=(-40, 100), doc="Temperature (°C)")
+    humidity = param.Number(default=0.0, bounds=(0, 100), doc="Relative humidity (%)")
+    lux = param.Number(default=0.0, bounds=(0, 200000), doc="Light intensity (lux)")
+    servo_pan = param.Number(default=90.0, bounds=(0, 180), doc="Pan angle (°)")
+    servo_tilt = param.Number(default=45.0, bounds=(0, 90), doc="Tilt angle (°)")
+    battery = param.Number(default=0.0, bounds=(0, 5), doc="Battery voltage (V)")
+    connected = param.Boolean(default=False)
+    last_seen = param.String(default="waiting...")
+    tracking_mode = param.String(default="Automatic", doc="'Automatic' or 'Manual'")
+    manual_pan = param.Number(default=90.0, bounds=(0, 180))
+    manual_tilt = param.Number(default=45.0, bounds=(0, 90))
+
+    def __init__(self, **params):
+        super().__init__(**params)
+
+        self.current_batch = set()
+
+        self.param.watch(
+            self._on_sensor_update,
+            [
+                "temperature",
+                "humidity",
+                "lux",
+                "servo_pan",
+                "servo_tilt",
+                "battery",
+            ],
+        )
+
+    def _on_sensor_update(self, event):
+        self.current_batch.add(event.name)
+
+        if BATCH_KEYS.issubset(self.current_batch):
+            self._commit_to_db()
+            self.current_batch.clear()
+            self.last_seen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _commit_to_db(self):
+        try:
+            store_mqtt_reading({
+                "temperature": self.temperature,
+                "humidity": self.humidity,
+                "light": self.lux,
+                "servo_pan": self.servo_pan,
+                "servo_tilt": self.servo_tilt,
+                "battery": self.battery,
+                "tracking_mode": self.tracking_mode,
+            })
+
+            logger.info(f"Reading saved at {self.last_seen} [{self.tracking_mode}]")
+
+        except Exception as e:
+            logger.error(f"DB write error: {e}")
+
+    def fetch_history(self, hours: int) -> pd.DataFrame:
+        try:
+            df = load_readings_last_n_hours_to_df(hours=hours)
+
+            if not df.empty and "light" in df.columns:
+                df = df.rename(columns={"light": "lux"})
+
+            return df
+
+        except Exception as e:
+            logger.error(f"DB read error: {e}")
+            return pd.DataFrame()
 
 
-def validate_sensor_value(sensor_key: str, payload: str) -> Optional[float]:
-    """
-    Parse and validate sensor payload.
-    
-    Args:
-        sensor_key: The sensor identifier
-        payload: The raw string payload from MQTT
-        
-    Returns:
-        Validated float value, or None if invalid
-    """
-    try:
-        value = float(payload)
-        
-        # Check bounds if sensor has bounds defined
-        if sensor_key in SENSOR_BOUNDS:
-            min_val, max_val = SENSOR_BOUNDS[sensor_key]
-            if not (min_val <= value <= max_val):
-                logger.warning(
-                    f"Sensor '{sensor_key}' value {value} out of bounds [{min_val}, {max_val}]"
-                )
-                return None
-        
-        return value
-    except ValueError as e:
-        logger.error(f"Could not parse {sensor_key} payload '{payload}': {e}")
-        return None
-
-
-# ─────────────────────────────────────────────────────────────
-# SENSOR STATE CLASS
-# Encapsulates all live sensor data and historical readings
-# ─────────────────────────────────────────────────────────────
-class SensorState:
-    """Manages sensor readings, live state, and data buffers."""
-    
-    def __init__(self, max_readings: int = MAX_READINGS):
-        """Initialize sensor state with rolling buffers."""
-        self.max_readings = max_readings
-        
-        # Rolling history buffers for trend analysis
-        self.readings: Dict[str, deque] = {
-            "time": deque(maxlen=max_readings),
-            "temperature": deque(maxlen=max_readings),
-            "humidity": deque(maxlen=max_readings),
-            "lux": deque(maxlen=max_readings),
-        }
-        
-        # Current live state — always holds the most recent value from ESP32
-        self.live: Dict[str, Any] = {
-            "temperature": 0.0,
-            "humidity": 0.0,
-            "lux": 0.0,
-            "servo_h": 90.0,
-            "servo_v": 90.0,
-            "last_seen": "waiting…",
-            "connected": False,
-        }
-    
-    def to_dataframe(self) -> pd.DataFrame:
-        """Convert rolling buffers to a pandas DataFrame for hvplot charts."""
-        return pd.DataFrame({
-            "time": list(self.readings["time"]),
-            "temperature": list(self.readings["temperature"]),
-            "humidity": list(self.readings["humidity"]),
-            "lux": list(self.readings["lux"]),
-        })
-    
-    def update_live(self, key: str, value: Any) -> None:
-        """Update a live state value."""
-        self.live[key] = value
-    
-    def add_reading_batch(self, timestamp: str) -> None:
-        """
-        Add current live values to rolling buffers.
-        Called when a complete sensor batch arrives (typically on temperature update).
-        """
-        self.readings["time"].append(timestamp)
-        self.readings["temperature"].append(self.live["temperature"])
-        self.readings["humidity"].append(self.live["humidity"])
-        self.readings["lux"].append(self.live["lux"])
-
-
-# Initialize shared sensor state
 sensor_state = SensorState()
-message_queue: queue.Queue = queue.Queue()
+message_queue = queue.Queue()
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR TREND CARDS
-# Each card shows: current value, % change since last reading,
-# and a mini sparkline chart — built with pn.indicators.Trend
+# GAUGE HELPER
 # ─────────────────────────────────────────────────────────────
-def make_trend_card(label: str, color: str, chart_style: str = "line") -> Tuple[pn.indicators.Trend, pn.Card]:
-    """
-    Build one sensor card with trend indicator.
-    
-    Args:
-        label: Display name for the sensor (with emoji)
-        color: Hex color code for the card styling
-        chart_style: Type of chart ('line', 'area', 'bar', 'step')
-        
-    Returns:
-        Tuple of (Trend widget, Card container)
-    """
-    trend = pn.indicators.Trend(
-        name=label,
-        data={"x": [0], "y": [0]},
-        value=0,
-        value_change=0,
-        plot_type=chart_style,
-        plot_color=color,
+def create_gauge(value: float, max_value: float, color: str, track_color: str) -> figure:
+    p = figure(
         height=180,
         sizing_mode="stretch_width",
+        toolbar_location=None,
+        tools="",
+        min_border=10,
     )
-    card = pn.Card(
-        trend,
-        hide_header=True,
-        sizing_mode="stretch_width",
-        styles={
-            "border": f"2px solid {color}",
-            "border-radius": "12px",
-            "box-shadow": f"0 4px 16px {color}33",
-            "padding": "10px",
-        },
+
+    p.background_fill_color = None
+    p.border_fill_color = None
+    p.outline_line_color = None
+    p.grid.visible = False
+    p.axis.visible = False
+
+    value = max(0, min(value, max_value))
+    angle = (value / max_value) * math.pi if max_value > 0 else 0
+
+    bg = [i * math.pi / 50 for i in range(51)]
+
+    p.line(
+        [0.75 * math.cos(a) for a in bg],
+        [0.75 * math.sin(a) for a in bg],
+        line_width=14,
+        color=track_color,
+        alpha=0.15,
     )
-    return trend, card
 
+    if angle > 0:
+        fg = [i * angle / 25 for i in range(26)]
 
-trend_temp, card_temp = make_trend_card("🌡 Temperature (°C)", PALETTE["temperature"], "line")
-trend_hum, card_hum = make_trend_card("💧 Humidity (%)", PALETTE["humidity"], "area")
-trend_lux, card_lux = make_trend_card("☀️ Light (lux)", PALETTE["lux"], "bar")
-
-
-# ─────────────────────────────────────────────────────────────
-# STATUS DISPLAYS — servo angles and connection info
-# ─────────────────────────────────────────────────────────────
-display_servo_h = pn.indicators.Number(
-    name="Horizontal Pan (°)", value=0, format="{value:.0f}", font_size="28pt"
-)
-display_servo_v = pn.indicators.Number(
-    name="Vertical Tilt (°)", value=0, format="{value:.0f}", font_size="28pt"
-)
-
-display_time = pn.widgets.StaticText(name="Last reading", value=WAITING_FOR_ESP32)
-display_conn = pn.widgets.StaticText(name="Connection", value="Connecting to broker…")
-
-
-# ─────────────────────────────────────────────────────────────
-# LIVE CHARTS — last 20 readings as hvplot line/area charts
-# ─────────────────────────────────────────────────────────────
-live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
-live_chart_lux = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
-
-
-def refresh_trend_card(trend_widget: pn.indicators.Trend, sensor_key: str) -> None:
-    """
-    Update a Trend card's sparkline and value from the latest readings buffer.
-    
-    Args:
-        trend_widget: The Trend indicator widget to update
-        sensor_key: The sensor key to pull data from (e.g., 'temperature')
-    """
-    buf = list(sensor_state.readings[sensor_key])
-    if len(buf) < 2:
-        return
-    
-    current = buf[-1]
-    previous = buf[-2]
-    pct_change = (current - previous) / abs(previous) if previous != 0 else 0.0
-    
-    trend_widget.data = {"x": list(range(len(buf))), "y": buf}
-    trend_widget.value = round(current, 2)
-    trend_widget.value_change = round(pct_change, 4)
-
-
-def refresh_live_charts() -> None:
-    """Redraw the temperature and lux hvplot charts from the current readings buffer."""
-    df = sensor_state.to_dataframe()
-    if len(df) < 2:
-        return
-    
-    try:
-        live_chart_temp.object = df.hvplot.line(
-            x="time", y="temperature",
-            title="Temperature over time",
-            xlabel="Time", ylabel="°C",
-            color=PALETTE["temperature"], line_width=2,
-            responsive=True, height=200,
+        p.line(
+            [0.75 * math.cos(a) for a in fg],
+            [0.75 * math.sin(a) for a in fg],
+            line_width=14,
+            color=color,
+            alpha=0.95,
         )
-        live_chart_lux.object = df.hvplot.area(
-            x="time", y="lux",
-            title="Light intensity over time",
-            xlabel="Time", ylabel="lux",
-            color=PALETTE["lux"], alpha=0.5, line_width=2,
-            responsive=True, height=200,
-        )
-    except Exception as e:
-        logger.error(f"Error refreshing live charts: {e}")
+
+    p.scatter(
+        0,
+        0,
+        size=24,
+        marker="circle",
+        fill_color=color,
+        line_color=color,
+        alpha=0.85,
+    )
+
+    p.x_range.start = -1.05
+    p.x_range.end = 1.05
+    p.y_range.start = -0.25
+    p.y_range.end = 1.05
+
+    return p
 
 
 # ─────────────────────────────────────────────────────────────
-# SENSOR SUMMARY TABLE
-# A Tabulator table that shows all sensors in one place.
+# REACTIVE GAUGE VIEWS
 # ─────────────────────────────────────────────────────────────
-summary_table = pn.widgets.Tabulator(
+@param.depends(sensor_state.param.temperature)
+def view_temp_gauge(_=None):
+    v = sensor_state.temperature
+    tc = THEME["accent_orange"]
+
+    return pn.Column(
+        pn.pane.HTML(
+            f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.1f} °C</h2>"
+        ),
+        pn.pane.Bokeh(
+            create_gauge(v, 100, tc, THEME["gauge_track"]),
+            sizing_mode="stretch_width",
+            height=180,
+        ),
+    )
+
+
+@param.depends(sensor_state.param.humidity)
+def view_hum_gauge(_=None):
+    v = sensor_state.humidity
+    tc = THEME["accent"]
+
+    return pn.Column(
+        pn.pane.HTML(
+            f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.1f} %</h2>"
+        ),
+        pn.pane.Bokeh(
+            create_gauge(v, 100, tc, THEME["gauge_track"]),
+            sizing_mode="stretch_width",
+            height=180,
+        ),
+    )
+
+
+@param.depends(
+    sensor_state.param.servo_pan,
+    sensor_state.param.manual_pan,
+    sensor_state.param.tracking_mode,
+)
+def view_pan_gauge(_=None, _mp=None, _tm=None):
+    is_manual = sensor_state.tracking_mode == "Manual"
+    v = sensor_state.manual_pan if is_manual else sensor_state.servo_pan
+    tc = THEME["accent"]
+
+    badge = (
+        f"<span style='font-size:0.55em;background:{tc};color:#fff;"
+        f"padding:2px 8px;border-radius:8px;margin-left:8px;"
+        f"vertical-align:middle;'>MANUAL</span>"
+        if is_manual
+        else ""
+    )
+
+    return pn.Column(
+        pn.pane.HTML(
+            f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.0f} °{badge}</h2>"
+        ),
+        pn.pane.Bokeh(
+            create_gauge(v, 180, tc, THEME["gauge_track"]),
+            sizing_mode="stretch_width",
+            height=180,
+        ),
+    )
+
+
+@param.depends(
+    sensor_state.param.servo_tilt,
+    sensor_state.param.manual_tilt,
+    sensor_state.param.tracking_mode,
+)
+def view_tilt_gauge(_=None, _mt=None, _tm=None):
+    is_manual = sensor_state.tracking_mode == "Manual"
+    v = sensor_state.manual_tilt if is_manual else sensor_state.servo_tilt
+    tc = THEME["accent_lime"]
+
+    badge = (
+        f"<span style='font-size:0.55em;background:{tc};color:#fff;"
+        f"padding:2px 8px;border-radius:8px;margin-left:8px;"
+        f"vertical-align:middle;'>MANUAL</span>"
+        if is_manual
+        else ""
+    )
+
+    return pn.Column(
+        pn.pane.HTML(
+            f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.0f} °{badge}</h2>"
+        ),
+        pn.pane.Bokeh(
+            create_gauge(v, 90, tc, THEME["gauge_track"]),
+            sizing_mode="stretch_width",
+            height=180,
+        ),
+    )
+
+
+@param.depends(sensor_state.param.battery)
+def view_battery(_=None):
+    v = sensor_state.battery
+
+    if v >= 3.5:
+        c = "#00ff41"
+    elif v >= 3.0:
+        c = "#ffcc00"
+    else:
+        c = "#ff4444"
+
+    return pn.pane.HTML(
+        f"<div style='text-align:center;padding:12px;'>"
+        f"<span style='font-size:2rem;color:{c};'>🔋 {v:.2f} V</span>"
+        f"</div>"
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# TIME FILTER & CHARTS
+# ─────────────────────────────────────────────────────────────
+time_filter = pn.widgets.RadioButtonGroup(
+    name="Historical Range",
+    options={
+        "1 Hour": 1,
+        "6 Hours": 6,
+        "24 Hours": 24,
+        "7 Days": 168,
+    },
+    value=1,
+    button_type="primary",
+    sizing_mode="stretch_width",
+)
+
+
+def build_env_chart(hours, last_seen):
+    df = sensor_state.fetch_history(hours)
+
+    if df.empty or len(df) < 2:
+        return pn.pane.Markdown("*Waiting for data...*")
+
+    return df.hvplot.line(
+        x="timestamp",
+        y=["temperature", "humidity"],
+        title="Environment Trends",
+        color=[THEME["accent_orange"], THEME["accent"]],
+        line_width=2,
+        responsive=True,
+        height=300,
+    )
+
+
+def build_tracking_chart(hours, last_seen):
+    df = sensor_state.fetch_history(hours)
+
+    if df.empty or len(df) < 2:
+        return pn.pane.Markdown("*Waiting for data...*")
+
+    return df.hvplot.step(
+        x="timestamp",
+        y=["servo_pan", "servo_tilt"],
+        title="Solar Tracking History",
+        color=[THEME["accent"], THEME["accent_lime"]],
+        line_width=2,
+        responsive=True,
+        height=300,
+    )
+
+
+bound_env = pn.bind(
+    build_env_chart,
+    hours=time_filter,
+    last_seen=sensor_state.param.last_seen,
+)
+
+bound_tracking = pn.bind(
+    build_tracking_chart,
+    hours=time_filter,
+    last_seen=sensor_state.param.last_seen,
+)
+
+
+# ─────────────────────────────────────────────────────────────
+# METRICS TABLE
+# ─────────────────────────────────────────────────────────────
+metrics_table = pn.widgets.Tabulator(
     pd.DataFrame({
-        "Sensor": ["Temperature", "Humidity", "Light", "Horizontal Pan", "Vertical Tilt"],
-        "Reading": ["—"] * 5,
-        "Unit": ["°C", "%", "lux", "°", "°"],
-        "Last updated": ["—"] * 5,
+        "Metric": ["--"],
+        "Value": ["--"],
+        "Tracking Mode": ["--"],
     }),
     show_index=False,
     disabled=True,
-    widths={"Sensor": 150, "Reading": 90, "Unit": 55, "Last updated": 100},
     sizing_mode="stretch_width",
-    height=250,
+    height=280,
+    theme="midnight",
 )
 
 
-def refresh_summary_table() -> None:
-    """Push the latest live values into the summary table."""
-    now = sensor_state.live["last_seen"]
-    summary_table.value = pd.DataFrame({
-        "Sensor": ["Temperature", "Humidity", "Light", "Horizontal Pan", "Vertical Tilt"],
-        "Reading": [
-            f"{sensor_state.live['temperature']:.1f}",
-            f"{sensor_state.live['humidity']:.0f}",
-            f"{sensor_state.live['lux']:.0f}",
-            f"{sensor_state.live['servo_h']:.0f}",
-            f"{sensor_state.live['servo_v']:.0f}",
+def update_metrics_table(event=None):
+    is_manual = sensor_state.tracking_mode == "Manual"
+
+    pan_val = sensor_state.manual_pan if is_manual else sensor_state.servo_pan
+    tilt_val = sensor_state.manual_tilt if is_manual else sensor_state.servo_tilt
+    mode_str = sensor_state.tracking_mode
+
+    metrics_table.value = pd.DataFrame({
+        "Metric": [
+            "Temperature",
+            "Humidity",
+            "Lux",
+            "Pan Angle",
+            "Tilt Angle",
+            "Battery",
+            "Last Update",
         ],
-        "Unit": ["°C", "%", "lux", "°", "°"],
-        "Last updated": [now] * 5,
+        "Value": [
+            f"{sensor_state.temperature:.1f} °C",
+            f"{sensor_state.humidity:.1f} %RH",
+            f"{sensor_state.lux:.0f} lux",
+            f"{pan_val:.1f} deg",
+            f"{tilt_val:.1f} deg",
+            f"{sensor_state.battery:.2f} V",
+            sensor_state.last_seen,
+        ],
+        "Tracking Mode": [mode_str] * 7,
     })
 
 
+sensor_state.param.watch(
+    update_metrics_table,
+    [
+        "temperature",
+        "humidity",
+        "lux",
+        "battery",
+        "servo_pan",
+        "servo_tilt",
+        "last_seen",
+        "tracking_mode",
+        "manual_pan",
+        "manual_tilt",
+    ],
+)
+
+update_metrics_table()
+
+
 # ─────────────────────────────────────────────────────────────
-# MQTT LOG — scrolling live feed of sensor data
+# CONNECTION STATUS WIDGET
 # ─────────────────────────────────────────────────────────────
-incoming_log = pn.widgets.TextAreaInput(
-    name="📡 Incoming sensor data",
-    value=f"{WAITING_FOR_DATA}\n",
-    height=200,
-    disabled=True,
+display_conn = pn.widgets.StaticText(
+    name="SYSTEM STATUS",
+    value="Connecting...",
     sizing_mode="stretch_width",
 )
 
 
-def log_incoming(entry: str) -> None:
-    """Add a new line at the top of the incoming log."""
-    lines = incoming_log.value.splitlines()
-    incoming_log.value = "\n".join([entry] + lines[:MAX_LOG_LINES]) + "\n"
+@param.depends(sensor_state.param.connected, watch=True)
+def _update_conn_display(_=None):
+    display_conn.value = (
+        f"ONLINE -- Connected to {MQTT_BROKER}"
+        if sensor_state.connected
+        else f"OFFLINE -- reconnecting to {MQTT_BROKER}..."
+    )
 
 
-btn_clear_logs = pn.widgets.Button(
-    name="🗑 Clear logs", button_type="danger", width=130
+# ─────────────────────────────────────────────────────────────
+# CONTROL WIDGETS
+# ─────────────────────────────────────────────────────────────
+control_switch_mode = pn.widgets.Switch(
+    name="Auto-Tracking Mode",
+    value=True,
+)
+
+control_pan = pn.widgets.IntSlider(
+    name="Manual Pan Angle",
+    start=0,
+    end=180,
+    step=1,
+    value=90,
+)
+
+control_tilt = pn.widgets.IntSlider(
+    name="Manual Tilt Angle",
+    start=0,
+    end=90,
+    step=1,
+    value=45,
+)
+
+btn_led = pn.widgets.Button(
+    name="TOGGLE LED",
+    button_type="primary",
+    sizing_mode="stretch_width",
+)
+
+btn_buzzer = pn.widgets.Button(
+    name="SOUND BUZZER",
+    button_type="warning",
+    sizing_mode="stretch_width",
+)
+
+btn_buzzer_off = pn.widgets.Button(
+    name="MUTE BUZZER",
+    button_type="danger",
+    sizing_mode="stretch_width",
+)
+
+btn_theme = pn.widgets.Button(
+    name="Light Theme",
+    button_type="light",
+    sizing_mode="stretch_width",
+)
+
+manual_pane = pn.Column(
+    pn.layout.Divider(),
+    pn.pane.Markdown(
+        "**MANUAL POSITIONING**",
+        styles={"color": THEME["accent"]},
+    ),
+    control_pan,
+    control_tilt,
+    visible=False,
 )
 
 
-def on_clear_logs(event: Any) -> None:
-    """Clear the incoming log."""
-    incoming_log.value = "Logs cleared.\n"
-    logger.info("Logs cleared by user")
+# ─────────────────────────────────────────────────────────────
+# COMMAND PUBLISHING
+# ─────────────────────────────────────────────────────────────
+def publish_command(topic_key: str, payload: str) -> None:
+    if topic_key not in CONTROL_TOPICS:
+        logger.error(f"Unknown control topic: {topic_key}")
+        return
+
+    if sensor_state.connected:
+        client.publish(CONTROL_TOPICS[topic_key], str(payload))
+        log_command(topic_key, payload, sent_by="operator")
+        logger.info(f"Command -> {topic_key}: {payload}")
+    else:
+        logger.warning(f"Command dropped because MQTT is not connected: {topic_key}={payload}")
 
 
-btn_clear_logs.on_click(on_clear_logs)
+def on_mode_switch(event):
+    auto = event.new
+
+    manual_pane.visible = not auto
+    sensor_state.tracking_mode = "Automatic" if auto else "Manual"
+
+    publish_command(
+        "tracking_mode",
+        "AUTO" if auto else "MANUAL",
+    )
+
+
+def on_pan_change(event):
+    sensor_state.manual_pan = float(event.new)
+    publish_command("servo_pan", str(event.new))
+
+
+def on_tilt_change(event):
+    sensor_state.manual_tilt = float(event.new)
+    publish_command("servo_tilt", str(event.new))
+
+
+control_switch_mode.param.watch(on_mode_switch, "value")
+control_pan.param.watch(on_pan_change, "value_throttled")
+control_tilt.param.watch(on_tilt_change, "value_throttled")
+
+btn_led.on_click(lambda event: publish_command("led", "TOGGLE"))
+btn_buzzer.on_click(lambda event: publish_command("buzzer", "TRIGGER"))
+btn_buzzer_off.on_click(lambda event: publish_command("buzzer", "OFF"))
+
+
+# ─────────────────────────────────────────────────────────────
+# LAYOUT BUILDER FUNCTIONS
+# ─────────────────────────────────────────────────────────────
+def make_card(title, color, *content):
+    return pn.Card(
+        *content,
+        title=title,
+        sizing_mode="stretch_width",
+        styles={
+            "background": THEME["card_bg"],
+            "border": f"2px solid {color}",
+            "padding": "10px",
+        },
+    )
+
+
+def build_main():
+    T = THEME
+
+    return pn.Column(
+        pn.Row(
+            pn.pane.Markdown(
+                "# Solar Tracker Command Center ☀️",
+                styles={
+                    "color": T["accent"],
+                    "text-align": "center",
+                    "margin": "0",
+                },
+            ),
+            styles={
+                "background": f"linear-gradient(135deg,{T['bg']} 0%,{T['bg']} 100%)",
+                "padding": "20px",
+                "border-radius": "12px",
+            },
+        ),
+
+        display_conn,
+
+        pn.pane.Markdown(
+            "**LIVE SENSOR FEED**",
+            styles={
+                "color": T["accent"],
+                "font-weight": "700",
+            },
+        ),
+
+        pn.GridBox(
+            make_card("TEMPERATURE", T["accent_orange"], view_temp_gauge),
+            make_card("HUMIDITY", T["accent"], view_hum_gauge),
+            ncols=2,
+            sizing_mode="stretch_width",
+        ),
+
+        pn.pane.Markdown(
+            "**PANEL ORIENTATION**",
+            styles={
+                "color": T["accent"],
+                "font-weight": "700",
+            },
+        ),
+
+        pn.GridBox(
+            make_card("PAN ANGLE", T["accent"], view_pan_gauge),
+            make_card("TILT ANGLE", T["accent_lime"], view_tilt_gauge),
+            ncols=2,
+            sizing_mode="stretch_width",
+        ),
+
+        pn.pane.Markdown(
+            "**BATTERY**",
+            styles={
+                "color": T["accent"],
+                "font-weight": "700",
+            },
+        ),
+
+        make_card("BATTERY VOLTAGE", T["accent_purple"], view_battery),
+
+        pn.pane.Markdown(
+            "**LIVE METRICS TABLE**",
+            styles={
+                "color": T["accent"],
+                "font-weight": "700",
+            },
+        ),
+
+        metrics_table,
+
+        pn.pane.Markdown(
+            "**HISTORICAL TRENDS**",
+            styles={
+                "color": T["accent"],
+                "font-weight": "700",
+            },
+        ),
+
+        time_filter,
+
+        pn.Column(
+            pn.panel(
+                bound_env,
+                sizing_mode="stretch_width",
+                height=300,
+            ),
+            pn.panel(
+                bound_tracking,
+                sizing_mode="stretch_width",
+                height=300,
+            ),
+        ),
+
+        sizing_mode="stretch_width",
+        styles={
+            "background": T["bg"],
+            "padding": "30px",
+        },
+    )
+
+
+def build_sidebar():
+    T = THEME
+
+    manual_pane[1] = pn.pane.Markdown(
+        "**MANUAL POSITIONING**",
+        styles={"color": T["accent"]},
+    )
+
+    return pn.Column(
+        pn.Card(
+            pn.Column(
+                pn.pane.Markdown(
+                    "**DISPLAY**",
+                    styles={"color": T["accent"]},
+                ),
+                btn_theme,
+
+                pn.layout.Divider(),
+
+                pn.pane.Markdown(
+                    "**TRACKING OVERRIDE**",
+                    styles={"color": T["accent"]},
+                ),
+                control_switch_mode,
+                manual_pane,
+
+                pn.layout.Divider(),
+
+                pn.pane.Markdown(
+                    "**ALERTS & SIGNALS**",
+                    styles={"color": T["accent"]},
+                ),
+                btn_led,
+                btn_buzzer,
+                btn_buzzer_off,
+
+                pn.layout.Divider(),
+            ),
+            title="CONTROL PANEL",
+            styles={
+                "background": T["card_bg"],
+                "border": f"1px solid {T['accent']}",
+            },
+        ),
+        sizing_mode="stretch_width",
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# THEME TOGGLE
+# ─────────────────────────────────────────────────────────────
+def toggle_theme(event):
+    global THEME
+
+    if THEME["name"] == "dark":
+        THEME = LIGHT_THEME
+        btn_theme.name = "Dark Theme"
+    else:
+        THEME = DARK_THEME
+        btn_theme.name = "Light Theme"
+
+    pn.config.raw_css = [THEME["css"]]
+
+    dashboard.main[0].clear()
+    dashboard.sidebar[0].clear()
+
+    dashboard.main[0].objects = build_main().objects
+    dashboard.sidebar[0].objects = build_sidebar().objects
+
+    dashboard.accent_base_color = THEME["accent"]
+    dashboard.header_background = THEME["header_bg"]
+
+    logger.info(f"Theme switched to {THEME['name']}")
+
+
+btn_theme.on_click(toggle_theme)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -366,47 +923,57 @@ btn_clear_logs.on_click(on_clear_logs)
 try:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 except AttributeError:
-    # Fallback for older paho-mqtt versions
     client = mqtt.Client()
 
 
-def on_connect(c: mqtt.Client, userdata: Any, flags: Any, reason_code: int, 
-               properties: Any = None) -> None:
-    """Handle MQTT connection event."""
-    if reason_code == 0:
-        sensor_state.update_live("connected", True)
-        display_conn.value = f"{CONNECTION_OK} to {BROKER}"
-        logger.info(f"Connected to MQTT broker: {BROKER}")
-        
-        # Subscribe to all sensor topics
+def on_connect(c, userdata, flags, rc, properties=None):
+    if rc == 0:
+        pn.state.execute(lambda: setattr(sensor_state, "connected", True))
+
         for topic in SENSOR_TOPICS.values():
             c.subscribe(topic)
-            logger.debug(f"Subscribed to: {topic}")
+
+        log_event("connection", "info", f"MQTT connected to {MQTT_BROKER}")
+        logger.info(f"MQTT connected to {MQTT_BROKER}")
+
     else:
-        sensor_state.update_live("connected", False)
-        display_conn.value = f"{CONNECTION_FAILED} (code {reason_code})"
-        logger.error(f"MQTT connection failed with code {reason_code}")
+        pn.state.execute(lambda: setattr(sensor_state, "connected", False))
+
+        log_event(
+            "connection",
+            "critical",
+            f"MQTT connection failed rc={rc}",
+        )
+
+        logger.error(f"MQTT connection failed rc={rc}")
 
 
-def on_disconnect(c: mqtt.Client, userdata: Any, disconnect_flags: Any = None, 
-                  reason_code: Any = None, properties: Any = None) -> None:
-    """Handle MQTT disconnection event."""
-    sensor_state.update_live("connected", False)
-    display_conn.value = CONNECTION_DISCONNECTED
-    logger.warning(f"Disconnected from MQTT broker (code {reason_code})")
+def on_disconnect(c, userdata, disconnect_flags, rc, properties=None):
+    pn.state.execute(lambda: setattr(sensor_state, "connected", False))
+
+    log_event(
+        "connection",
+        "warning",
+        f"MQTT disconnected rc={rc}",
+    )
+
+    logger.warning(f"MQTT disconnected rc={rc}")
 
 
-def on_message(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-    """
-    Called every time a new MQTT message arrives from the ESP32.
-    Queues messages for processing on the main thread (thread-safe).
-    """
+def on_message(c, userdata, msg):
     try:
-        payload = msg.payload.decode().strip()
         topic = msg.topic
-        message_queue.put((topic, payload), block=False)
+        val = float(msg.payload.decode().strip())
+
+        for key, sensor_topic in SENSOR_TOPICS.items():
+            if topic == sensor_topic:
+                pn.state.execute(
+                    lambda k=key, v=val: setattr(sensor_state, k, v)
+                )
+                break
+
     except Exception as e:
-        logger.error(f"Error queuing MQTT message: {e}")
+        logger.error(f"MQTT message error: {e}")
 
 
 client.on_connect = on_connect
@@ -414,192 +981,74 @@ client.on_disconnect = on_disconnect
 client.on_message = on_message
 
 
-def connect_to_broker() -> None:
-    """Start the MQTT connection in a background thread."""
+def _start_mqtt():
     try:
-        client.connect(BROKER, PORT, keepalive=MQTT_KEEPALIVE)
+        client.username_pw_set(MQTT_USERNAME, MQTT_PASSWD)
+        client.tls_set(tls_version=ssl.PROTOCOL_TLS)
+        client.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
         client.loop_forever()
+
     except Exception as e:
-        display_conn.value = f"{CONNECTION_ERROR}: {e}"
-        logger.error(f"MQTT connection error: {e}")
+        logger.error(f"MQTT thread error: {e}")
+        pn.state.execute(lambda: setattr(sensor_state, "connected", False))
 
 
-broker_thread = threading.Thread(target=connect_to_broker, daemon=True)
-broker_thread.start()
+threading.Thread(
+    target=_start_mqtt,
+    daemon=True,
+).start()
 
 
 # ─────────────────────────────────────────────────────────────
-# MESSAGE PROCESSING — handle queued MQTT messages on main thread
+# MESSAGE PROCESSING LOOP
 # ─────────────────────────────────────────────────────────────
-def create_topic_handlers() -> Dict[str, Callable[[str], None]]:
-    """
-    Create a dispatch dictionary mapping topics to handler functions.
-    More maintainable than if-elif chains.
-    """
-    def handle_temperature(payload: str) -> None:
-        value = validate_sensor_value("temperature", payload)
-        if value is not None:
-            sensor_state.update_live("temperature", value)
-    
-    def handle_humidity(payload: str) -> None:
-        value = validate_sensor_value("humidity", payload)
-        if value is not None:
-            sensor_state.update_live("humidity", value)
-    
-    def handle_lux(payload: str) -> None:
-        value = validate_sensor_value("lux", payload)
-        if value is not None:
-            sensor_state.update_live("lux", value)
-    
-    def handle_servo_h(payload: str) -> None:
-        value = validate_sensor_value("servo_h", payload)
-        if value is not None:
-            sensor_state.update_live("servo_h", value)
-            display_servo_h.value = value
-    
-    def handle_servo_v(payload: str) -> None:
-        value = validate_sensor_value("servo_v", payload)
-        if value is not None:
-            sensor_state.update_live("servo_v", value)
-            display_servo_v.value = value
-    
-    return {
-        SENSOR_TOPICS["temperature"]: handle_temperature,
-        SENSOR_TOPICS["humidity"]: handle_humidity,
-        SENSOR_TOPICS["lux"]: handle_lux,
-        SENSOR_TOPICS["servo_h"]: handle_servo_h,
-        SENSOR_TOPICS["servo_v"]: handle_servo_v,
-    }
-
-
-topic_handlers = create_topic_handlers()
-
-
-def process_queued_messages() -> None:
-    """
-    Process all queued MQTT messages.
-    Called periodically on the main thread (thread-safe).
-    """
+def process_messages():
     try:
         while True:
-            topic, payload = message_queue.get(timeout=MESSAGE_QUEUE_TIMEOUT)
-            
-            # Route to appropriate handler
-            if topic in topic_handlers:
-                topic_handlers[topic](payload)
-            else:
-                logger.warning(f"Unknown topic: {topic}")
-            
-            # Timestamp the message
-            timestamp = get_timestamp()
-            sensor_state.update_live("last_seen", timestamp)
-            display_time.value = timestamp
-            
-            # Log the incoming message
-            sensor_name = topic.split("/")[-1]
-            log_incoming(f"[{timestamp}]  {sensor_name}: {payload}")
-            
-            # On temperature reading (sync signal), update all displays
-            # Temperature is used as the sync signal because the ESP32 sends
-            # all sensors together — temperature always arrives last in the sequence.
-            if topic == SENSOR_TOPICS["temperature"]:
-                sensor_state.add_reading_batch(timestamp)
-                
-                refresh_trend_card(trend_temp, "temperature")
-                refresh_trend_card(trend_hum, "humidity")
-                refresh_trend_card(trend_lux, "lux")
-                refresh_live_charts()
-                refresh_summary_table()
-    
+            topic, payload = message_queue.get_nowait()
+
+            try:
+                val = float(payload)
+            except ValueError:
+                continue
+
+            for key, sensor_topic in SENSOR_TOPICS.items():
+                if topic == sensor_topic:
+                    setattr(sensor_state, key, val)
+                    break
+
     except queue.Empty:
         pass
-    except Exception as e:
-        logger.error(f"Error processing queued message: {e}")
 
 
-# Schedule message processing on the main thread
-pn.state.add_periodic_callback(process_queued_messages, period=100)
-
-
-# ─────────────────────────────────────────────────────────────
-# LAYOUT — main content area
-# ─────────────────────────────────────────────────────────────
-main_content = pn.Column(
-    pn.pane.Markdown("## Live Sensor Readings"),
-    pn.GridBox(
-        card_temp, card_hum, card_lux,
-        ncols=3,
-        sizing_mode="stretch_width",
-        styles={"gap": "16px"},
-    ),
-
-    pn.pane.Markdown("## Solar Panel Orientation"),
-    pn.GridBox(display_servo_h, display_servo_v, ncols=2),
-    pn.Row(
-        pn.Column(pn.pane.Markdown("**Last reading**"), display_time),
-        pn.Column(pn.pane.Markdown("**Broker status**"), display_conn),
-    ),
-
-    pn.pane.Markdown("## All Sensors at a Glance"),
-    summary_table,
-
-    pn.pane.Markdown("## Trends — last 20 readings"),
-    pn.Row(live_chart_temp, live_chart_lux),
-)
-
-
-# ─────────────────────────────────────────────────────────────
-# LAYOUT — sidebar (logs)
-# ─────────────────────────────────────────────────────────────
-sidebar_content = [
-    pn.Column(
-        pn.Card(
-            pn.pane.Markdown(
-                """
-**🔴 Read-Only Dashboard**
-
-This dashboard displays real-time sensor data from the ESP32 solar tracker.
-
-**Control Notes:**
-- Servo motors and buzzer are controlled via physical button on the ESP32
-- Auto-tracking is enabled at startup (triggered by light levels)
-- All sensor readings update in real-time via MQTT
-
-**Sensors:**
-- 🌡 Temperature & Humidity (DHT11)
-- ☀️ Light intensity (BH1750)
-- 📍 Servo angles (LDR feedback)
-            """
-            ),
-            title="ℹ️ Dashboard Info",
-            collapsed=False,
-            sizing_mode="stretch_width",
-        ),
-        pn.Spacer(height=10),
-        pn.Card(
-            incoming_log,
-            btn_clear_logs,
-            title="📡 MQTT Log",
-            collapsed=False,
-            sizing_mode="stretch_width",
-        ),
+def _start_background_tasks():
+    pn.state.add_periodic_callback(
+        process_messages,
+        period=250,
     )
-]
+
+
+pn.state.onload(_start_background_tasks)
 
 
 # ─────────────────────────────────────────────────────────────
 # DASHBOARD TEMPLATE
 # ─────────────────────────────────────────────────────────────
 dashboard = pn.template.FastListTemplate(
-    title="☀️ Solar Tracker Dashboard ☀️",
-    accent_base_color="#0F6E56",
-    header_background="#0F6E56",
-    theme="dark",
-    theme_toggle=True,
-    main_max_width="1400px",
-    sidebar=sidebar_content,
-    main=[main_content],
+    title="IoT Solar Tracker",
+    accent_base_color=THEME["accent"],
+    header_background=THEME["header_bg"],
+    theme=THEME["name"],
+    main_max_width="1600px",
+    sidebar=[build_sidebar()],
+    main=[build_main()],
 )
 
-logger.info("Dashboard initialized and ready to display")
-dashboard.show()
+
+# ─────────────────────────────────────────────────────────────
+# DISPLAY DASHBOARD
+# ─────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    dashboard.show()
+else:
+    dashboard.servable()
