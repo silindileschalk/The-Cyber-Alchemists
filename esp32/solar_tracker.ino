@@ -215,7 +215,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WIFI CONNECTION
+// WIFI CONNECT
 // ─────────────────────────────────────────────────────────────
 void connectWiFi() {
   Serial.printf("Connecting to Wi-Fi: %s\n", WIFI_SSID);
