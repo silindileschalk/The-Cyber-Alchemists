@@ -6,6 +6,7 @@ The Cyber Alchemists
 
 import math
 import queue
+import random
 import logging
 import threading
 from datetime import datetime
@@ -18,6 +19,7 @@ import param
 import pandas as pd
 import panel as pn
 import hvplot.pandas
+import ssl
 import paho.mqtt.client as mqtt
 from bokeh.plotting import figure
 from bokeh.util.warnings import BokehUserWarning
@@ -51,6 +53,10 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s"
 )
 logger = logging.getLogger(__name__)
+pn.extension("tabulator", sizing_mode="stretch_width")
+# Suppress the harmless Bokeh widget recycling warnings
+warnings.filterwarnings("ignore", category=BokehUserWarning, message="reference already known")
+
 
 pn.extension("tabulator", sizing_mode="stretch_width")
 
@@ -203,7 +209,6 @@ SENSOR_TOPICS = {
     "servo_pan": f"{BASE}/actuators/servo_pan",
     "servo_tilt": f"{BASE}/actuators/servo_tilt",
 }
-
 CONTROL_TOPICS = {
     "tracking_mode": f"{BASE}/control/tracking_mode",
     "servo_pan": f"{BASE}/control/servo_pan",
@@ -887,6 +892,8 @@ def build_sidebar():
     )
 
 
+
+# PERSISTENT METRICS TABLE
 # ─────────────────────────────────────────────────────────────
 # THEME TOGGLE
 # ─────────────────────────────────────────────────────────────
@@ -920,6 +927,184 @@ btn_theme.on_click(toggle_theme)
 # ─────────────────────────────────────────────────────────────
 # MQTT CLIENT SETUP
 # ─────────────────────────────────────────────────────────────
+control_switch_mode = pn.widgets.Switch(name="Auto-Tracking Mode", value=True)
+control_pan  = pn.widgets.IntSlider(name="Manual Pan Angle",  start=0, end=180, step=1, value=90)
+control_tilt = pn.widgets.IntSlider(name="Manual Tilt Angle", start=0, end=90,  step=1, value=45)
+btn_led      = pn.widgets.Button(name="TOGGLE LED",          button_type="primary", sizing_mode="stretch_width")
+btn_buzzer   = pn.widgets.Button(name="SOUND BUZZER",        button_type="warning",  sizing_mode="stretch_width")
+btn_theme    = pn.widgets.Button(name="Light Theme",         button_type="light",    sizing_mode="stretch_width")
+
+manual_pane = pn.Column(
+    pn.layout.Divider(),
+    pn.pane.Markdown("**MANUAL POSITIONING**", styles={"color": THEME["accent"]}),
+    control_pan,
+    control_tilt,
+    visible=False,
+)
+
+def publish_command(topic_key: str, payload: str) -> None:
+    if sensor_state.connected:
+        client.publish(CONTROL_TOPICS[topic_key], str(payload))
+        log_command(topic_key, payload, sent_by="operator")
+        logger.info(f"Command -> {topic_key}: {payload}")
+    else:
+        logger.warning(f"Command dropped (not connected): {topic_key}={payload}")
+
+def on_mode_switch(event):
+    auto = event.new
+    manual_pane.visible = not auto
+    sensor_state.tracking_mode = "Automatic" if auto else "Manual"
+    publish_command("tracking_mode", "AUTO" if auto else "MANUAL")
+
+control_switch_mode.param.watch(on_mode_switch, 'value')
+
+def on_pan_change(event):
+    sensor_state.manual_pan = float(event.new)
+    publish_command("servo_pan", str(event.new))
+
+def on_tilt_change(event):
+    sensor_state.manual_tilt = float(event.new)
+    publish_command("servo_tilt", str(event.new))
+
+control_pan.param.watch(on_pan_change,   'value_throttled')
+control_tilt.param.watch(on_tilt_change, 'value_throttled')
+btn_led.on_click(lambda e: publish_command("led","TOGGLE"))
+btn_buzzer.on_click(lambda e: publish_command("buzzer", "TRIGGER"))
+
+
+# LAYOUT BUILDER FUNCTIONS
+def make_card(title, color, *content):
+    return pn.Card(
+        *content,
+        title=title,
+        sizing_mode="stretch_width",
+        styles={
+            "background": THEME["card_bg"],
+            "border":     f"2px solid {color}",
+            "padding":    "10px",
+        },
+    )
+
+def build_main():
+    T = THEME
+    return pn.Column(
+        # Header
+        pn.Row(
+            pn.pane.Markdown(
+                "# Solar Tracker Command Center ☀️",
+                styles={"color": T["accent"], "text-align": "center", "margin": "0"},
+            ),
+            styles={
+                "background":    f"linear-gradient(135deg,{T['bg']} 0%,{T['bg']} 100%)",
+                "padding":       "20px",
+                "border-radius": "12px",
+            },
+        ),
+        display_conn,
+
+        # Live sensor gauges
+        pn.pane.Markdown("**LIVE SENSOR FEED**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        pn.GridBox(
+            make_card("TEMPERATURE", T["accent_orange"], view_temp_gauge),
+            make_card("HUMIDITY",    T["accent"],view_hum_gauge),
+            ncols=2, sizing_mode="stretch_width",
+        ),
+
+        # Panel orientation gauges
+        pn.pane.Markdown("**PANEL ORIENTATION**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        pn.GridBox(
+            make_card("PAN ANGLE",  T["accent"],      view_pan_gauge),
+            make_card("TILT ANGLE", T["accent_lime"], view_tilt_gauge),
+            ncols=2, sizing_mode="stretch_width",
+        ),
+
+        # Battery
+        pn.pane.Markdown("**BATTERY**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        make_card("BATTERY VOLTAGE", T["accent_purple"], view_battery),
+
+        # Live metrics table
+        pn.pane.Markdown("**LIVE METRICS TABLE**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        metrics_table,
+
+        # Historical trends
+        pn.pane.Markdown("**HISTORICAL TRENDS**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        time_filter,
+        pn.Column(
+            pn.panel(bound_env,      sizing_mode="stretch_width", height=300),
+            pn.panel(bound_tracking, sizing_mode="stretch_width", height=300),
+        ),
+
+        sizing_mode="stretch_width",
+        styles={"background": T["bg"], "padding": "30px"},
+    )
+
+def build_sidebar():
+    """
+    Builds the sidebar using the current THEME.
+    Called once at startup and again whenever the theme is toggled.
+    """
+    T = THEME
+    return pn.Column(
+        pn.Card(
+            pn.Column(
+                pn.pane.Markdown("**DISPLAY**", styles={"color": T["accent"]}),
+                btn_theme,
+                pn.layout.Divider(),
+                pn.pane.Markdown("**TRACKING OVERRIDE**",  styles={"color": T["accent"]}),
+                control_switch_mode,
+                manual_pane,
+                pn.layout.Divider(),
+                pn.pane.Markdown("**ALERTS & SIGNALS**",styles={"color": T["accent"]}),
+                btn_led,
+                btn_buzzer,
+                pn.layout.Divider(),
+            ),
+            title="CONTROL PANEL",
+            styles={
+                "background": T["card_bg"],
+                "border":     f"1px solid {T['accent']}",
+            },
+        )
+    )
+
+# THEME TOGGLE
+
+def toggle_theme(event):
+    """
+    If the current theme is dark, switch to light — otherwise switch back.
+    After swapping THEME, rebuild both panels so every colour reference
+    """
+    global THEME
+
+    if THEME["name"] == "dark":
+        THEME = LIGHT_THEME
+        btn_theme.name = "Dark Theme 🌑"
+    else:
+        THEME = DARK_THEME
+        btn_theme.name = "Light Theme ☀"
+        
+    pn.config.raw_css = [THEME["css"]]
+    dashboard.main[0].clear()
+    dashboard.sidebar[0].clear()
+
+    # Now safely rebuild and assign the new objects
+    dashboard.main[0].objects = build_main().objects
+    dashboard.sidebar[0].objects = build_sidebar().objects
+
+    # Update the template header and accent
+    dashboard.accent_base_color = THEME["accent"]
+    dashboard.header_background = THEME["header_bg"]
+
+    logger.info(f"Theme switched to {THEME['name']}")
+btn_theme.on_click(toggle_theme)
+
+# MQTT CLIENT SETUP
+#******************************************************************************
 try:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 except AttributeError:
@@ -1016,6 +1201,8 @@ def process_messages():
                 if topic == sensor_topic:
                     setattr(sensor_state, key, val)
                     break
+    except queue.Empty:
+        pass
 
     except queue.Empty:
         pass
