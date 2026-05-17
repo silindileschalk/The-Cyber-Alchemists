@@ -1,5 +1,7 @@
-// The Cyber Alchemists 
+// The Cyber Alchemists
 // EPG317E Capstone Project
+// ESP32 Solar Tracker Code aligned with Python Panel Dashboard
+
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <Wire.h>
@@ -9,18 +11,23 @@
 #include <BH1750.h>
 #include <WiFiClientSecure.h>
 
-const char* WIFI_SSID     = "Ethrom";
-const char* WIFI_PASSWORD = "password";          
+// ─────────────────────────────────────────────────────────────
+// WIFI CONFIG
+// ─────────────────────────────────────────────────────────────
+const char* WIFI_SSID     = "The Cyber Alchemists IoT";
+const char* WIFI_PASSWORD = "Cy13ER123";
 
 // ─────────────────────────────────────────────────────────────
-// MQTT CONFIG — must match dashboard_v4.py exactly
+// MQTT CONFIG — must match dashboard.py
 // ─────────────────────────────────────────────────────────────
-const char* MQTT_BROKER = "4438a6aa9a8f42ddb3bbbf61da5f9cf5.s1.eu.hivemq.cloud";
-const int   MQTT_PORT   = 8883;
-const char* MQTT_CLIENT = "Cyber_Alchemy";
-const char* MQTT_PASSWD = "P@ss123456";
+const char* MQTT_BROKER   = "4438a6aa9a8f42ddb3bbbf61da5f9cf5.s1.eu.hivemq.cloud";
+const int   MQTT_PORT     = 8883;
+const char* MQTT_USERNAME = "Cyber_Alchemy";
+const char* MQTT_PASSWD   = "P@ss123456";
 
-// Publish topics (ESP32 → Dashboard)
+const char* TEAM_ID = "TheCyberAlchemists";
+
+// Publish topics: ESP32 → Dashboard
 const char* T_TEMP    = "epg317e/solar/TheCyberAlchemists/sensors/temperature";
 const char* T_HUM     = "epg317e/solar/TheCyberAlchemists/sensors/humidity";
 const char* T_LUX     = "epg317e/solar/TheCyberAlchemists/sensors/lux";
@@ -28,7 +35,7 @@ const char* T_BATTERY = "epg317e/solar/TheCyberAlchemists/sensors/battery";
 const char* T_PAN_FB  = "epg317e/solar/TheCyberAlchemists/actuators/servo_pan";
 const char* T_TILT_FB = "epg317e/solar/TheCyberAlchemists/actuators/servo_tilt";
 
-// Subscribe topics (Dashboard → ESP32)
+// Subscribe topics: Dashboard → ESP32
 const char* T_MODE     = "epg317e/solar/TheCyberAlchemists/control/tracking_mode";
 const char* T_PAN_CMD  = "epg317e/solar/TheCyberAlchemists/control/servo_pan";
 const char* T_TILT_CMD = "epg317e/solar/TheCyberAlchemists/control/servo_tilt";
@@ -36,192 +43,218 @@ const char* T_LED      = "epg317e/solar/TheCyberAlchemists/control/led";
 const char* T_BUZZER   = "epg317e/solar/TheCyberAlchemists/control/buzzer";
 
 // ─────────────────────────────────────────────────────────────
-// PIN DEFINITIONS  (unchanged from teammate's wiring)
+// PIN DEFINITIONS
 // ─────────────────────────────────────────────────────────────
-#define SERVO_H   18    // Pan  servo
-#define SERVO_V   19    // Tilt servo
+#define SERVO_H   18
+#define SERVO_V   19
 #define BUZZER    15
 #define BUTTON    2
+
 #define LDR_BOT   34
 #define LDR_TOP   35
 #define LDR_LEFT  32
 #define LDR_RIGHT 33
-#define BATTERY   36    // GPIO 36 (VP) — voltage divider to battery
-#define LED       27    // External LED
+
+#define BATTERY   36
+#define LED       27
 
 // ─────────────────────────────────────────────────────────────
 // HARDWARE OBJECTS
 // ─────────────────────────────────────────────────────────────
-LCD_I2C      lcd(0x27, 16, 2);
-DHT11        dht(4);
-BH1750       lightMeter;
-Servo        servoHori;
-Servo        servoVerti;
-WiFiClientSecure   wifiClient;
+LCD_I2C lcd(0x27, 16, 2);
+DHT11 dht(4);
+BH1750 lightMeter;
+
+Servo servoHori;
+Servo servoVerti;
+
+WiFiClientSecure wifiClient;
 PubSubClient mqttClient(wifiClient);
 
 // ─────────────────────────────────────────────────────────────
 // STATE VARIABLES
 // ─────────────────────────────────────────────────────────────
-int  servoH    = 90;
-int  servoV    = 45;
-int  tolerance = 25;
-bool autoMode  = true;
-bool ledState  = false;
-// added for lcd.
-bool lcdOn = true;
-bool lastButtonState = HIGH;
-// smoothing vars
-unsigned long lastServoUpdate = 0;
-const long SERVO_UPDATE_MS = 50;   // update every 50 ms
-const int STEP_SIZE = 2;           // degrees per update
+int servoH = 90;
+int servoV = 45;
 
-unsigned long lastPublish   = 0;
+int tolerance = 25;
+
+bool autoMode = true;
+bool ledState = false;
+bool buzzerState = false;
+
+unsigned long lastPublish = 0;
 unsigned long lastReconnect = 0;
-const long    PUBLISH_MS    = 1000;  // Publish every second
-const long    RECONNECT_MS  = 5000;  // Retry MQTT every 5 seconds
+unsigned long buzzerStartedAt = 0;
+
+const unsigned long PUBLISH_MS = 1000;
+const unsigned long RECONNECT_MS = 5000;
+const unsigned long BUZZER_PULSE_MS = 300;
 
 // ─────────────────────────────────────────────────────────────
-// Battery voltage reading
-// Voltage divider: battery+ → R1(100kΩ) → GPIO36 → R2(100kΩ) → GND
-// Adjust R1/R2 values below if you use different resistors
+// BATTERY VOLTAGE READING
+// Voltage divider: battery+ → R1 → GPIO36 → R2 → GND
 // ─────────────────────────────────────────────────────────────
 float readBatteryVoltage() {
-  const float R1      = 100000.0;
-  const float R2      = 100000.0;
-  const float VREF    = 3.3;
+  const float R1 = 100000.0;
+  const float R2 = 100000.0;
+  const float VREF = 3.3;
   const float ADC_MAX = 4095.0;
 
-  int   raw  = analogRead(BATTERY);
-  float vin  = (raw / ADC_MAX) * VREF;        // Voltage at ADC pin
-  float vbat = vin * ((R1 + R2) / R2);        // Actual battery voltage
-  return vbat;
+  int raw = analogRead(BATTERY);
+
+  float adcVoltage = (raw / ADC_MAX) * VREF;
+  float batteryVoltage = adcVoltage * ((R1 + R2) / R2);
+
+  return batteryVoltage;
 }
 
 // ─────────────────────────────────────────────────────────────
-// MQTT: message received from dashboard
+// SAFE LCD PRINT HELPER
+// ─────────────────────────────────────────────────────────────
+void printPaddedLCD(const String& text) {
+  String output = text;
+
+  while (output.length() < 16) {
+    output += " ";
+  }
+
+  lcd.print(output.substring(0, 16));
+}
+
+// ─────────────────────────────────────────────────────────────
+// BUZZER HELPERS
+// ─────────────────────────────────────────────────────────────
+void buzzerOn() {
+  buzzerState = true;
+  buzzerStartedAt = millis();
+  digitalWrite(BUZZER, HIGH);
+}
+
+void buzzerOff() {
+  buzzerState = false;
+  digitalWrite(BUZZER, LOW);
+}
+
+// ─────────────────────────────────────────────────────────────
+// MQTT MESSAGE RECEIVED FROM DASHBOARD
 // ─────────────────────────────────────────────────────────────
 void onMessage(char* topic, byte* payload, unsigned int len) {
   char msg[64];
+
   memset(msg, 0, sizeof(msg));
   memcpy(msg, payload, min((unsigned int)63, len));
 
-  Serial.printf("[MQTT IN] %s → %s\n", topic, msg);
+  Serial.printf("[MQTT IN] %s -> %s\n", topic, msg);
 
-  // Tracking mode toggle
+  // Auto/manual tracking mode
   if (strcmp(topic, T_MODE) == 0) {
-    autoMode = (strcmp(msg, "AUTO") == 0);
+    if (strcmp(msg, "AUTO") == 0) {
+      autoMode = true;
+    }
+    else if (strcmp(msg, "MANUAL") == 0) {
+      autoMode = false;
+    }
+
     lcd.setCursor(0, 0);
-    lcd.print(autoMode ? "Mode: AUTO" : "Mode: MANUAL ");
-    Serial.printf("Mode: %s\n", autoMode ? "AUTO" : "MANUAL");
+    printPaddedLCD(autoMode ? "Mode: AUTO" : "Mode: MANUAL");
+
+    Serial.printf("Tracking mode: %s\n", autoMode ? "AUTO" : "MANUAL");
   }
 
-  // Manual pan command (only active in MANUAL mode)
-  else if (strcmp(topic, T_PAN_CMD) == 0 && !autoMode) {
-    servoH = constrain(atoi(msg), 0, 180);
-    servoHori.write(servoH);
-    Serial.printf("Pan → %d°\n", servoH);
-  }
+  // Manual pan from dashboard slider
+  else if (strcmp(topic, T_PAN_CMD) == 0) {
+    if (!autoMode) {
+      servoH = constrain(atoi(msg), 0, 180);
+      servoHori.write(servoH);
 
-  // Manual tilt command (only active in MANUAL mode)
-  else if (strcmp(topic, T_TILT_CMD) == 0 && !autoMode) {
-    servoV = constrain(atoi(msg), 0, 90);
-    servoVerti.write(servoV);
-    Serial.printf("Tilt → %d°\n", servoV);
-  }
-
-  // LED toggle from dashboard
-  else if (strcmp(topic, T_LED) == 0) {
-    if (strcmp(msg, "TOGGLE") == 0) {
-      ledState = !ledState;
-      digitalWrite(LED, ledState ? HIGH : LOW);
-      Serial.printf("LED: %s\n", ledState ? "ON" : "OFF");
+      Serial.printf("Manual pan -> %d degrees\n", servoH);
     }
   }
 
-  // Buzzer trigger from dashboard
+  // Manual tilt from dashboard slider
+  else if (strcmp(topic, T_TILT_CMD) == 0) {
+    if (!autoMode) {
+      servoV = constrain(atoi(msg), 0, 90);
+      servoVerti.write(servoV);
+
+      Serial.printf("Manual tilt -> %d degrees\n", servoV);
+    }
+  }
+
+  // LED command from dashboard
+  else if (strcmp(topic, T_LED) == 0) {
+    if (strcmp(msg, "TOGGLE") == 0) {
+      ledState = !ledState;
+    }
+    else if (strcmp(msg, "ON") == 0) {
+      ledState = true;
+    }
+    else if (strcmp(msg, "OFF") == 0) {
+      ledState = false;
+    }
+
+    digitalWrite(LED, ledState ? HIGH : LOW);
+
+    Serial.printf("LED: %s\n", ledState ? "ON" : "OFF");
+  }
+
+  // Buzzer command from dashboard
   else if (strcmp(topic, T_BUZZER) == 0) {
-    if (strcmp(msg, "TRIGGER") == 0) {
-      digitalWrite(BUZZER, HIGH);
-      delay(300);
-      digitalWrite(BUZZER, LOW);
+    if (strcmp(msg, "TRIGGER") == 0 || strcmp(msg, "ON") == 0) {
+      buzzerOn();
       Serial.println("Buzzer triggered by dashboard.");
+    }
+    else if (strcmp(msg, "OFF") == 0) {
+      buzzerOff();
+      Serial.println("Buzzer muted by dashboard.");
     }
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// MQTT: connect / reconnect
+// MQTT CONNECT / RECONNECT
 // ─────────────────────────────────────────────────────────────
 void connectMQTT() {
   Serial.print("Connecting to MQTT...");
+
   lcd.setCursor(0, 1);
-  lcd.print("MQTT connecting ");
+  printPaddedLCD("MQTT connecting");
 
-  if (mqttClient.connect("ESP32_Tracker", MQTT_CLIENT, MQTT_PASSWD)) {
+  String clientId = "ESP32_Tracker_";
+  clientId += String((uint32_t)ESP.getEfuseMac(), HEX);
+
+  if (mqttClient.connect(clientId.c_str(), MQTT_USERNAME, MQTT_PASSWD)) {
     Serial.println(" connected!");
-    lcd.setCursor(0, 1);
-    lcd.print("MQTT: connected ");
 
-    // Subscribe to all dashboard control topics
+    lcd.setCursor(0, 1);
+    printPaddedLCD("MQTT: connected");
+
     mqttClient.subscribe(T_MODE);
     mqttClient.subscribe(T_PAN_CMD);
     mqttClient.subscribe(T_TILT_CMD);
     mqttClient.subscribe(T_LED);
     mqttClient.subscribe(T_BUZZER);
-  } else {
-    Serial.printf(" failed (rc=%d)\n", mqttClient.state());
+
+    Serial.println("Subscribed to dashboard control topics.");
+  }
+  else {
+    Serial.printf(" failed, rc=%d\n", mqttClient.state());
+
     lcd.setCursor(0, 1);
-    lcd.print("MQTT: FAILED    ");
+    printPaddedLCD("MQTT: FAILED");
   }
 }
-// Smooth movement helper
-void moveServoSmooth(Servo &servo, int &currentAngle, int targetAngle) {
-  if (currentAngle < targetAngle) {
-    currentAngle += STEP_SIZE;
-    if (currentAngle > targetAngle) currentAngle = targetAngle;
-  } else if (currentAngle > targetAngle) {
-    currentAngle -= STEP_SIZE;
-    if (currentAngle < targetAngle) currentAngle = targetAngle;
-  }
-  servo.write(currentAngle);
-}
+
 // ─────────────────────────────────────────────────────────────
-// SETUP
+// WIFI CONNECT
 // ─────────────────────────────────────────────────────────────
-void setup() {
-  Serial.begin(115200);
-  delay(500);
-
-  // Pins
-  pinMode(BUTTON, INPUT_PULLUP);
-  pinMode(BUZZER, OUTPUT);
-  pinMode(LED, OUTPUT);
-  digitalWrite(BUZZER, LOW);   
-  digitalWrite(LED, LOW);
-  Wire.begin(21, 22);
-
-  // LCD
-  lcd.begin();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Solar Tracker   ");
-  lcd.setCursor(0, 1);
-  lcd.print("Starting...     ");
-
-  // BH1750
-  lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
-
-  // Servos — starting position
-  servoHori.attach(SERVO_H);
-  servoVerti.attach(SERVO_V);
-  servoHori.write(servoH);
-  servoVerti.write(servoV);
-
-  // Wi-Fi
+void connectWiFi() {
   Serial.printf("Connecting to Wi-Fi: %s\n", WIFI_SSID);
+
   lcd.setCursor(0, 1);
-  lcd.print("WiFi connecting ");
+  printPaddedLCD("WiFi connecting");
+
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -230,166 +263,201 @@ void setup() {
   }
 
   Serial.printf("\nWi-Fi connected. IP: %s\n", WiFi.localIP().toString().c_str());
-  lcd.setCursor(0, 1);
-  lcd.print("WiFi: OK....");
-  delay(800);
-  wifiClient.setInsecure(); 
-  // MQTT
-  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
-  mqttClient.setCallback(onMessage);
-  connectMQTT();
 
-  Serial.println("System ready for communication.");
+  lcd.setCursor(0, 1);
+  printPaddedLCD("WiFi: OK");
+  delay(800);
 }
 
-// LOOP
+// ─────────────────────────────────────────────────────────────
+// SETUP
+// ─────────────────────────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+  delay(500);
 
+  pinMode(BUTTON, INPUT_PULLUP);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(LED, OUTPUT);
+
+  digitalWrite(BUZZER, LOW);
+  digitalWrite(LED, LOW);
+
+  Wire.begin(21, 22);
+
+  lcd.begin();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  printPaddedLCD("Solar Tracker");
+
+  lcd.setCursor(0, 1);
+  printPaddedLCD("Starting...");
+
+  if (lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE)) {
+    Serial.println("BH1750 ready.");
+  }
+  else {
+    Serial.println("BH1750 not detected.");
+  }
+
+  servoHori.attach(SERVO_H);
+  servoVerti.attach(SERVO_V);
+
+  servoHori.write(servoH);
+  servoVerti.write(servoV);
+
+  connectWiFi();
+
+  wifiClient.setInsecure();
+
+  mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
+  mqttClient.setCallback(onMessage);
+  mqttClient.setBufferSize(256);
+
+  connectMQTT();
+
+  Serial.println("System ready.");
+}
+
+// ─────────────────────────────────────────────────────────────
+// LOOP
+// ─────────────────────────────────────────────────────────────
 void loop() {
-  unsigned long now = millis();
-  // MQTT keepalive + non-blocking reconnect
+  // Keep Wi-Fi alive
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+
+  // MQTT keepalive and reconnect
   if (!mqttClient.connected()) {
-    if (now - lastReconnect >= RECONNECT_MS) {
-      lastReconnect = now;
+    unsigned long nowReconnect = millis();
+
+    if (nowReconnect - lastReconnect >= RECONNECT_MS) {
+      lastReconnect = nowReconnect;
       connectMQTT();
     }
   }
+
   mqttClient.loop();
 
-  // WiFi disconnected, buzzer screams
+  // Physical button triggers buzzer while pressed
+  bool buttonPressed = digitalRead(BUTTON) == LOW;
 
-if (WiFi.status() != WL_CONNECTED)
-{
+  if (buttonPressed) {
     digitalWrite(BUZZER, HIGH);
-}
-else
-{
+  }
+  else if (!buzzerState) {
     digitalWrite(BUZZER, LOW);
-}
-  // lcd on/off
-bool buttonState = digitalRead(BUTTON);
+  }
 
-if (buttonState == LOW && lastButtonState == HIGH)
-{
-    lcdOn = !lcdOn;
+  // Auto turn off dashboard-triggered buzzer pulse
+  if (buzzerState && millis() - buzzerStartedAt >= BUZZER_PULSE_MS) {
+    buzzerOff();
+  }
 
-    if (lcdOn)
-    {
-        lcd.backlight();
-        Serial.println("LCD ON");
-    }
-    else
-    {
-        lcd.noBacklight();
-        Serial.println("LCD OFF");
-    }
-
-    delay(200); // debounce
-}
-
-lastButtonState = buttonState;
-
-  // ── Read sensors ────────────────────────────────────────────
+  // Read sensors
   float lux = lightMeter.readLightLevel();
+
   int left  = analogRead(LDR_LEFT);
   int right = analogRead(LDR_RIGHT);
   int top   = analogRead(LDR_TOP);
   int bot   = analogRead(LDR_BOT);
 
-  // DHT11 — check for -1 (error), not 0 (valid reading)
-  int humReading  = dht.readHumidity();
+  int humReading = dht.readHumidity();
   int tempReading = dht.readTemperature();
-  if (humReading == -1 || tempReading == -1)
-  {
-    Serial.println("DHT NOT READING");
-    humReading  = 0;
+
+  if (humReading == -1 || tempReading == -1) {
+    Serial.println("DHT11 read error.");
+    humReading = 0;
     tempReading = 0;
   }
 
   float battery = readBatteryVoltage();
 
-  // Debug output for all sensor readings
-  Serial.printf(
-    "L:%d R:%d T:%d B:%d | Lux:%.1f | T:%d H:%d | Bat:%.2fV\n",
-    left, right, top, bot, lux, tempReading, humReading, battery);
-// Auto
-// Decide target angles based on LDRs 
-int targetH = servoH;
-int targetV = servoV;
+  // Auto tracking
+  if (autoMode) {
+    int horizontalError = left - right;
+    int verticalError = top - bot;
 
-// Horizontal decision
-if ((left > right) && (left > top) && (abs(left - right) > tolerance)) {
-    targetH = 0;
-} else if ((right > left) && (right > top) && (abs(left - right) > tolerance)) {
-    targetH = 180;
-} else {
-    targetH = 90;
-}
+    if (abs(horizontalError) > tolerance) {
+      if (horizontalError > 0) {
+        servoH -= 3;
+      }
+      else {
+        servoH += 3;
+      }
+    }
 
-// Vertical decision
-if (abs(top - bot) > tolerance) {
-    if (top > bot) targetV = servoV + 10;  // tilt up
-    else targetV = servoV - 10;            // tilt down
-} else {
-    targetV = servoV; // hold position
-}
+    if (abs(verticalError) > tolerance) {
+      if (verticalError > 0) {
+        servoV += 3;
+      }
+      else {
+        servoV -= 3;
+      }
+    }
 
-// Constrain targets
-targetH = constrain(targetH, 0, 180);
-targetV = constrain(targetV, 0, 90);
+    servoH = constrain(servoH, 0, 180);
+    servoV = constrain(servoV, 0, 90);
 
-// Smoothly move toward targets every SERVO_UPDATE_MS
+    servoHori.write(servoH);
+    servoVerti.write(servoV);
+  }
 
-if (now - lastServoUpdate >= SERVO_UPDATE_MS) {
-  lastServoUpdate = now;
-  moveServoSmooth(servoHori, servoH, targetH);
-  moveServoSmooth(servoVerti, servoV, targetV);
-}
-
-    // Enforce servo angle limits, then write
-    servoH = constrain(servoH, 0, 180);  
-    servoV = constrain(servoV, 0, 90);   
-
-  
-  
-
-  // ── LCD display ─────────────────────────────────────────────
+  // LCD display
   lcd.setCursor(0, 0);
-  lcd.print(autoMode ? "AUTO " : "MAN  ");
-  lcd.print("Lux:");
-  lcd.print((int)lux);
-  lcd.print("     ");
+
+  String line1 = autoMode ? "AUTO " : "MAN  ";
+  line1 += "Lux:";
+  line1 += String((int)lux);
+  printPaddedLCD(line1);
 
   lcd.setCursor(0, 1);
-  lcd.print("H:");
-  lcd.print(servoH);
-  lcd.print(" V:");
-  lcd.print(servoV);
-  lcd.print(" T:");
-  lcd.print(tempReading);
-  lcd.print("   ");
 
-  // 
+  String line2 = "P:";
+  line2 += String(servoH);
+  line2 += " T:";
+  line2 += String(servoV);
+  line2 += " C:";
+  line2 += String(tempReading);
+  printPaddedLCD(line2);
+
+  // Publish to dashboard
+  unsigned long now = millis();
+
   if (now - lastPublish >= PUBLISH_MS) {
     lastPublish = now;
 
-    char buf[16];
+    char buf[20];
 
     dtostrf((float)tempReading, 1, 1, buf);
     mqttClient.publish(T_TEMP, buf);
+
     dtostrf((float)humReading, 1, 1, buf);
     mqttClient.publish(T_HUM, buf);
+
     dtostrf(lux, 1, 0, buf);
     mqttClient.publish(T_LUX, buf);
+
     dtostrf(battery, 1, 2, buf);
     mqttClient.publish(T_BATTERY, buf);
+
     itoa(servoH, buf, 10);
     mqttClient.publish(T_PAN_FB, buf);
+
     itoa(servoV, buf, 10);
     mqttClient.publish(T_TILT_FB, buf);
 
     Serial.printf(
-      "[PUBLISH] T=%d H=%d Lux=%.0f Bat=%.2fV Pan=%d Tilt=%d\n",
-      tempReading, humReading, lux, battery, servoH, servoV
+      "[PUBLISH] Temp=%d Hum=%d Lux=%.0f Bat=%.2fV Pan=%d Tilt=%d Mode=%s\n",
+      tempReading,
+      humReading,
+      lux,
+      battery,
+      servoH,
+      servoV,
+      autoMode ? "AUTO" : "MANUAL"
     );
   }
 
