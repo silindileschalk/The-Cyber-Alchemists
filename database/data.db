@@ -1,0 +1,40 @@
+# Simple IoT Solar Tracker Database (Python + SQLite)
+
+import sqlite3
+from datetime import datetime
+
+# Connect to database
+conn = sqlite3.connect("solar_tracker.db")
+cursor = conn.cursor()
+
+# Create table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS solar_data (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    light_level INTEGER,
+    panel_angle REAL,
+    timestamp TEXT
+)
+""")
+
+# Example sensor data
+light_level = 850
+panel_angle = 45.5
+time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# Insert data into database
+cursor.execute("""
+INSERT INTO solar_data (light_level, panel_angle, timestamp)
+VALUES (?, ?, ?)
+""", (light_level, panel_angle, time))
+
+conn.commit()
+
+# Display saved data
+cursor.execute("SELECT * FROM solar_data")
+
+for row in cursor.fetchall():
+    print(row)
+
+# Close database
+conn.close()
