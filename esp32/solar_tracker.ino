@@ -78,7 +78,7 @@ const int STEP_SIZE = 2;           // degrees per update
 
 unsigned long lastPublish   = 0;
 unsigned long lastReconnect = 0;
-const long    PUBLISH_MS    = 1000;  // Publish every 2 seconds
+const long    PUBLISH_MS    = 1000;  // Publish every second
 const long    RECONNECT_MS  = 5000;  // Retry MQTT every 5 seconds
 
 // ─────────────────────────────────────────────────────────────
@@ -245,9 +245,9 @@ void setup() {
 // LOOP
 
 void loop() {
+  unsigned long now = millis();
   // MQTT keepalive + non-blocking reconnect
   if (!mqttClient.connected()) {
-    unsigned long now = millis();
     if (now - lastReconnect >= RECONNECT_MS) {
       lastReconnect = now;
       connectMQTT();
@@ -338,7 +338,7 @@ targetH = constrain(targetH, 0, 180);
 targetV = constrain(targetV, 0, 90);
 
 // Smoothly move toward targets every SERVO_UPDATE_MS
-unsigned long now = millis();
+
 if (now - lastServoUpdate >= SERVO_UPDATE_MS) {
   lastServoUpdate = now;
   moveServoSmooth(servoHori, servoH, targetH);
@@ -349,7 +349,7 @@ if (now - lastServoUpdate >= SERVO_UPDATE_MS) {
     servoH = constrain(servoH, 0, 180);  
     servoV = constrain(servoV, 0, 90);   
 
-  }
+  
   
 
   // ── LCD display ─────────────────────────────────────────────
