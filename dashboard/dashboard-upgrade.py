@@ -1,5 +1,5 @@
 """
-EPG317E Capstone Project — Solar Tracker Dashboard (v3)
+EPG317E Capstone Project — Solar Tracker Dashboard
 The Cyber Alchemists
 --------------------------------------------------------
 """
