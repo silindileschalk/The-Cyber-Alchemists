@@ -223,13 +223,13 @@ Cloud deployment with scalable database
 👥 Authors
 ## The Cyber Alchemist
 # Members and student numbers
-223009193 S Schalk
-223051755 SI NTULI
-224055563 L Matsimela
-223085157 LT Mbazima
-222009085 HE Mulibana
-EPG317E Capstone Team
-Central University of Technology, Free State
+223009193 S Schalk 
+223051755 SI NTULI 
+224055563 L Matsimela   
+223085157 LT Mbazima  
+222009085 HE Mulibana 
+EPG317E Capstone Team 
+Central University of Technology, Free State 
 
 📜 License
 For academic use only
