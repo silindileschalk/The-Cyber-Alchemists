@@ -1,633 +1,506 @@
 """
-EPG317E — Solar Tracker Dashboard
-System Module: Real-time Telemetry, Actuator Control, and Historical Analysis
-Target Environment: PythonAnywhere (WSGI Deployment)
+EPG317E Capstone Project — Solar Tracker Dashboard (v3)
+The Cyber Alchemists
+--------------------------------------------------------
 """
 
-import panel as pn
-import paho.mqtt.client as mqtt
-import pandas as pd
-import hvplot.pandas
+import math
+import queue
+import random
+import logging
 import threading
-import sqlite3
+from datetime import datetime
+import param
+import pandas as pd
+import panel as pn
+import hvplot.pandas
 import ssl
-from datetime import datetime, timedelta
-from collections import deque
+import paho.mqtt.client as mqtt
+from bokeh.plotting import figure
+import warnings
+from bokeh.util.warnings import BokehUserWarning
+import sys
+from pathlib import Path
+currentFilePath = Path(__file__).resolve()
+repoRoot = currentFilePath.parent.parent
+databaseFolder = repoRoot / "DatabaseFolder" 
+sys.path.insert(0, str(databaseFolder))
 
-# Initialize Panel extension and configure global template constraints
-pn.extension("tabulator", sizing_mode="stretch_width", template="fast")
+from database import (
+    store_mqtt_reading,
+    log_command,
+    log_event,
+    load_readings_last_n_hours_to_df,
+)
 
 # ─────────────────────────────────────────────────────────────
-# SYSTEM CONFIGURATION
+# LOGGING & PANEL INIT
 # ─────────────────────────────────────────────────────────────
-# HiveMQ Cloud broker credentials and TLS parameters
-BROKER    = "609a213d79034184b1befa784bd08e2a.s1.eu.hivemq.cloud"
-PORT      = 8883
-MQTT_USER = "TheCyberAlchemists"
-MQTT_PASS = "rWJ6zm@9f5zUCEp"
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
+pn.extension("tabulator", sizing_mode="stretch_width")
+# Suppress the harmless Bokeh widget recycling warnings
+warnings.filterwarnings("ignore", category=BokehUserWarning, message="reference already known")
 
-# System identifiers (Must correlate with ESP32 firmware configuration)
-TEAM_ID   = "team01"          
-BASE      = f"epg317e/solar/{TEAM_ID}"
-DB_FILE   = "solar_data.db"
 
-# MQTT topic definitions for incoming sensor telemetry
+
+# ─────────────────────────────────────────────────────────────
+# THEME DEFINITIONS
+# ─────────────────────────────────────────────────────────────
+DARK_THEME = {
+    "name":          "dark",
+    "bg":            "#0a0e27",
+    "card_bg":       "linear-gradient(135deg, #0f1535 0%, #1a1f3a 100%)",
+    "header_bg":     "#0a0e27",
+    "accent":        "#00d9ff",
+    "accent_lime":   "#00ff41",
+    "accent_orange": "#ff6b35",
+    "accent_yellow": "#ffcc00",
+    "accent_purple": "#ff00ff",
+    "gauge_track":   "#00d9ff",
+    "css": """
+        body { background: linear-gradient(135deg,#0a0e27 0%,#1a1f3a 50%,#0f1535 100%) !important;
+               font-family:'Segoe UI',monospace !important; }
+        .pn-card { background:linear-gradient(135deg,#0f1535 0%,#1a1f3a 100%) !important;
+                   border:1px solid rgba(0,217,255,0.3) !important; border-radius:12px !important; }
+        .bk-root { background:transparent !important; }
+        h2,h3 { font-family:'Segoe UI',monospace !important; }
+        @media (max-width: 768px) {
+            .pn-GridBox { grid-template-columns: 1fr !important; }
+            .bk-GridBox { grid-template-columns: 1fr !important; }
+            .bk-btn-group { flex-wrap: wrap !important; }
+            .bk-btn-group .bk-btn { flex: 1 1 40% !important; margin: 2px !important; }
+        }
+    """,
+}
+
+LIGHT_THEME = {
+    "name":          "light",
+    "bg":            "#f0f4ff",
+    "card_bg":       "linear-gradient(135deg, #ffffff 30%, #e8eeff 70%)",
+    "header_bg":     "#1565c0",
+    "accent":        "#1565c0",
+    "accent_lime":   "#2e7d32",
+    "accent_orange": "#e65100",
+    "accent_yellow": "#f57f17",
+    "accent_purple": "#6a1b9a",
+    "gauge_track":   "#90caf9",
+    "css": """
+        body { background: linear-gradient(135deg,#f0f4ff 50%,#e3eaff 50%,#dce8ff 0%) !important;
+               font-family:'Segoe UI',monospace !important; color:#1a1a2e !important; }
+        .pn-card { background:linear-gradient(135deg,#ffffff 0%,#e8eeff 100%) !important;
+                   border:1px solid rgba(21,101,192,0.35) !important; border-radius:12px !important; }
+        .bk-root { background:transparent !important; }
+        h2,h3 { font-family:'Segoe UI',monospace !important; color:#1a1a2e !important; }
+        @media (max-width: 768px) {
+            .pn-GridBox { grid-template-columns: 1fr !important; }
+            .bk-GridBox { grid-template-columns: 1fr !important; }
+            .bk-btn-group { flex-wrap: wrap !important; }
+            .bk-btn-group .bk-btn { flex: 1 1 40% !important; margin: 2px !important; }
+        }
+    """,
+}
+
+# Start with dark theme
+THEME = DARK_THEME
+pn.config.raw_css = [THEME["css"]]
+
+# ─────────────────────────────────────────────────────────────
+# MQTT CONFIG
+# ─────────────────────────────────────────────────────────────
+
+
+MQTT_BROKER   = "4438a6aa9a8f42ddb3bbbf61da5f9cf5.s1.eu.hivemq.cloud"
+MQTT_PORT     = 8883
+MQTT_USERNAME = "Cyber_Alchemy"
+MQTT_PASSWD   = "P@ss123456"
+MQTT_KEEPALIVE = 60
+TEAM_ID    = "TheCyberAlchemists"
+BASE       = f"epg317e/solar/{TEAM_ID}"
+BATCH_KEYS = {"temperature", "humidity", "lux", "servo_pan", "servo_tilt", "battery"}
+
 SENSOR_TOPICS = {
-    "temperature" : f"{BASE}/sensors/temperature",
-    "humidity"    : f"{BASE}/sensors/humidity",
-    "lux"         : f"{BASE}/sensors/lux",
-    "battery"     : f"{BASE}/sensors/battery",
-    "servo_pan"   : f"{BASE}/actuators/servo_pan",
-    "servo_tilt"  : f"{BASE}/actuators/servo_tilt",
-    "tracking"    : f"{BASE}/control/tracking_mode",
+    "temperature": f"{BASE}/sensors/temperature",
+    "humidity":    f"{BASE}/sensors/humidity",
+    "lux":         f"{BASE}/sensors/lux",
+    "battery":     f"{BASE}/sensors/battery",
+    "servo_pan":   f"{BASE}/actuators/servo_pan",
+    "servo_tilt":  f"{BASE}/actuators/servo_tilt",
+}
+CONTROL_TOPICS = {
+    "tracking_mode": f"{BASE}/control/tracking_mode",
+    "servo_pan":     f"{BASE}/control/servo_pan",
+    "servo_tilt":    f"{BASE}/control/servo_tilt",
+    "buzzer":        f"{BASE}/control/buzzer",
 }
 
-# MQTT topic definitions for outgoing actuator control commands
-COMMAND_TOPICS = {
-    "tracking"  : f"{BASE}/control/tracking_mode",
-    "led"       : f"{BASE}/control/led",
-    "buzzer"    : f"{BASE}/control/buzzer",
-    "servo_pan" : f"{BASE}/actuators/servo_pan",
-    "servo_tilt": f"{BASE}/actuators/servo_tilt",
-    "threshold" : f"{BASE}/control/lux_threshold",
-}
+# ─────────────────────────────────────────────────────────────
+# SENSOR STATE
+# ─────────────────────────────────────────────────────────────
+class SensorState(param.Parameterized):
+    temperature   = param.Number(default=0.0,  bounds=(-40, 100),  doc="Temperature (°C)")
+    humidity      = param.Number(default=0.0,  bounds=(0, 100),    doc="Relative humidity (%)")
+    lux           = param.Number(default=0.0,  bounds=(0, 200000), doc="Light intensity (lux)")
+    servo_pan     = param.Number(default=90.0, bounds=(0, 180),    doc="Pan angle (°)")
+    servo_tilt    = param.Number(default=45.0, bounds=(0, 90),     doc="Tilt angle (°)")
+    battery       = param.Number(default=0.0,  bounds=(0, 5),      doc="Battery voltage (V)")
+    connected     = param.Boolean(default=False)
+    last_seen     = param.String(default="waiting...")
+    tracking_mode = param.String(default="Automatic", doc="'Automatic' or 'Manual'")
+    manual_pan    = param.Number(default=90.0, bounds=(0, 180))
+    manual_tilt   = param.Number(default=45.0, bounds=(0, 90))
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        self.current_batch: set = set()
+        self.param.watch(
+            self._on_sensor_update,
+            ['temperature', 'humidity', 'lux', 'servo_pan', 'servo_tilt', 'battery']
+        )
+
+    def _on_sensor_update(self, event):
+        self.current_batch.add(event.name)
+        if BATCH_KEYS.issubset(self.current_batch):
+            self._commit_to_db()
+            self.current_batch.clear()
+            self.last_seen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _commit_to_db(self):
+        try:
+            store_mqtt_reading({
+                "temperature":   self.temperature,
+                "humidity":      self.humidity,
+                "light":         self.lux,
+                "servo_pan":     self.servo_pan,
+                "servo_tilt":    self.servo_tilt,
+                "battery":       self.battery,
+                "tracking_mode": self.tracking_mode,
+            })
+            logger.info(f"Reading saved at {self.last_seen} [{self.tracking_mode}]")
+        except Exception as e:
+            logger.error(f"DB write error: {e}")
+
+    def fetch_history(self, hours: int) -> pd.DataFrame:
+        try:
+            df = load_readings_last_n_hours_to_df(hours=hours)
+            if not df.empty and "light" in df.columns:
+                df = df.rename(columns={"light": "lux"})
+            return df
+        except Exception as e:
+            logger.error(f"DB read error: {e}")
+            return pd.DataFrame()
+
+sensor_state  = SensorState()
+message_queue: queue.Queue = queue.Queue()
 
 
 # ─────────────────────────────────────────────────────────────
-# DATABASE ARCHITECTURE
+# GAUGE HELPER
 # ─────────────────────────────────────────────────────────────
-def init_db():
-    """Initializes the SQLite database schema for persistent data storage."""
-    with sqlite3.connect(DB_FILE) as conn:
-        c = conn.cursor()
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS sensor_data (
-                timestamp DATETIME,
-                temperature REAL,
-                humidity REAL,
-                lux REAL,
-                battery REAL
-            )
-        ''')
-        conn.commit()
-
-init_db()
-
-
-# ─────────────────────────────────────────────────────────────
-# IN-MEMORY DATA BUFFERS
-# ─────────────────────────────────────────────────────────────
-# Fixed-length rolling buffers for real-time visualization optimization
-MAX_READINGS = 20
-
-readings = {
-    "time"        : deque(maxlen=MAX_READINGS),
-    "temperature" : deque(maxlen=MAX_READINGS),
-    "humidity"    : deque(maxlen=MAX_READINGS),
-    "lux"         : deque(maxlen=MAX_READINGS),
-    "battery"     : deque(maxlen=MAX_READINGS),
-}
-
-def readings_to_dataframe():
-    """Casts in-memory queues to a pandas DataFrame for HoloViews integration."""
-    return pd.DataFrame({
-        "time"        : list(readings["time"]),
-        "temperature" : list(readings["temperature"]),
-        "humidity"    : list(readings["humidity"]),
-        "lux"         : list(readings["lux"]),
-        "battery"     : list(readings["battery"]),
-    })
+def create_gauge(value: float, max_value: float, color: str, track_color: str) -> figure:
+    p = figure(height=180, sizing_mode="stretch_width", toolbar_location=None, tools="", min_border=10)
+    p.background_fill_color = p.border_fill_color = p.outline_line_color = None
+    p.grid.visible = p.axis.visible = False
+    angle = (value / max_value) * math.pi if max_value > 0 else 0
+    bg = [i * math.pi / 50 for i in range(51)]
+    p.line([0.75 * math.cos(a) for a in bg], [0.75 * math.sin(a) for a in bg],
+           line_width=14, color=track_color, alpha=0.15)
+    if angle > 0:
+        fg = [i * angle / 25 for i in range(26)]
+        p.line([0.75 * math.cos(a) for a in fg], [0.75 * math.sin(a) for a in fg],
+               line_width=14, color=color, alpha=0.95)
+    p.scatter(0, 0, size=24, marker="circle", fill_color=color, line_color=color, alpha=0.85)
+    p.x_range.start, p.x_range.end = -1.05, 1.05
+    p.y_range.start, p.y_range.end = -0.25, 1.05
+    return p
 
 
 # ─────────────────────────────────────────────────────────────
-# GLOBAL STATE MANAGEMENT
+# REACTIVE GAUGE VIEWS
+# Each function reads THEME at render time, so rebuilding the
+# layout after a theme swap gives fresh colours automatically.
 # ─────────────────────────────────────────────────────────────
-# State dictionary maintaining current telemetry and connectivity status
-live = {
-    "temperature" : 0.0,
-    "humidity"    : 0.0,
-    "lux"         : 0.0,
-    "battery"     : 0.0,
-    "servo_pan"   : 90.0,
-    "servo_tilt"  : 45.0,
-    "tracking"    : "unknown",
-    "last_seen"   : "waiting…",
-    "connected"   : False,
-}
-
-
-# ─────────────────────────────────────────────────────────────
-# UI CONFIGURATION: STYLING & PALETTES
-# ─────────────────────────────────────────────────────────────
-PALETTE = {
-    "temperature" : "#0F6E56",   
-    "humidity"    : "#185FA5",   
-    "lux"         : "#BA7517",   
-    "battery"     : "#993556",   
-}
-
-
-# ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: TELEMETRY INDICATORS
-# ─────────────────────────────────────────────────────────────
-def make_trend_card(label, color, chart_style="line"):
-    """Constructs a composite UI card featuring a dynamic trend indicator."""
-    trend = pn.indicators.Trend(
-        name=label,
-        data={"x": [0], "y": [0]},
-        value=0,
-        value_change=0,
-        plot_type=chart_style,
-        plot_color=color,
-        height=180,
-        sizing_mode="stretch_width",
-    )
-    card = pn.Card(
-        trend,
-        hide_header=True,
-        sizing_mode="stretch_width",
-        styles={
-            "border"        : f"2px solid {color}",
-            "border-radius" : "12px",
-            "box-shadow"    : f"0 4px 16px {color}33",
-            "padding"       : "10px",
-        },
-    )
-    return trend, card
-
-trend_temp, card_temp = make_trend_card("🌡 Temperature (°C)", PALETTE["temperature"], "line")
-trend_hum,  card_hum  = make_trend_card("💧 Humidity (%)",     PALETTE["humidity"],    "area")
-trend_lux,  card_lux  = make_trend_card("☀️ Light (lux)",      PALETTE["lux"],         "bar")
-trend_bat,  card_bat  = make_trend_card("🔋 Battery (V)",      PALETTE["battery"],     "step")
-
-
-# ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: STATIC METRICS
-# ─────────────────────────────────────────────────────────────
-display_pan  = pn.indicators.Number(name="Pan angle (°)",  value=0, format="{value:.0f}", font_size="28pt")
-display_tilt = pn.indicators.Number(name="Tilt angle (°)", value=0, format="{value:.0f}", font_size="28pt")
-
-display_mode = pn.widgets.StaticText(name="Tracking mode", value="—")
-display_time = pn.widgets.StaticText(name="Last reading",  value="Waiting for ESP32…")
-display_conn = pn.widgets.StaticText(name="Connection",    value="Connecting to broker…")
-
-
-# ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: REAL-TIME VISUALIZATIONS
-# ─────────────────────────────────────────────────────────────
-live_chart_temp = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
-live_chart_lux  = pn.pane.HoloViews(sizing_mode="stretch_width", height=200)
-
-def refresh_trend_card(trend_widget, sensor_key):
-    """Calculates relative rate of change and updates the corresponding trend UI."""
-    buf = list(readings[sensor_key])
-    if len(buf) < 2:
-        return
-    current  = buf[-1]
-    previous = buf[-2]
-    pct_change = (current - previous) / abs(previous) if previous != 0 else 0.0
-    trend_widget.data         = {"x": list(range(len(buf))), "y": buf}
-    trend_widget.value        = round(current, 2)
-    trend_widget.value_change = round(pct_change, 4)
-
-def refresh_live_charts():
-    """Updates HoloViews panes with the latest in-memory buffer arrays."""
-    df = readings_to_dataframe()
-    if len(df) < 2:
-        return
-    live_chart_temp.object = df.hvplot.line(
-        x="time", y="temperature",
-        title="Live Temperature",
-        xlabel="Time", ylabel="°C",
-        color=PALETTE["temperature"], line_width=2,
-        responsive=True, height=200,
-    )
-    live_chart_lux.object = df.hvplot.area(
-        x="time", y="lux",
-        title="Live Light Intensity",
-        xlabel="Time", ylabel="lux",
-        color=PALETTE["lux"], alpha=0.5, line_width=2,
-        responsive=True, height=200,
+@param.depends(sensor_state.param.temperature)
+def view_temp_gauge(_=None):
+    v  = sensor_state.temperature
+    tc = THEME["accent_orange"]
+    return pn.Column(
+        pn.pane.HTML(f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.1f} \u00b0C</h2>"),
+        pn.pane.Bokeh(create_gauge(v, 100, tc, THEME["gauge_track"]),
+                      sizing_mode="stretch_width", height=180),
     )
 
+@param.depends(sensor_state.param.humidity)
+def view_hum_gauge(_=None):
+    v  = sensor_state.humidity
+    tc = THEME["accent"]
+    return pn.Column(
+        pn.pane.HTML(f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.1f} %</h2>"),
+        pn.pane.Bokeh(create_gauge(v, 100, tc, THEME["gauge_track"]),
+                      sizing_mode="stretch_width", height=180),
+    )
 
-# ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: HISTORICAL DATA ANALYSIS
-# ─────────────────────────────────────────────────────────────
-time_range_selector = pn.widgets.RadioButtonGroup(
+@param.depends(
+    sensor_state.param.servo_pan,
+    sensor_state.param.manual_pan,
+    sensor_state.param.tracking_mode,
+)
+def view_pan_gauge(_=None, _mp=None, _tm=None):
+    is_manual = sensor_state.tracking_mode == "Manual"
+    v  = sensor_state.manual_pan if is_manual else sensor_state.servo_pan
+    tc = THEME["accent"]
+    badge = (
+        f"<span style='font-size:0.55em;background:{tc};color:#fff;"
+        f"padding:2px 8px;border-radius:8px;margin-left:8px;vertical-align:middle;'>MANUAL</span>"
+        if is_manual else ""
+    )
+    return pn.Column(
+        pn.pane.HTML(f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.0f} \u00b0{badge}</h2>"),
+        pn.pane.Bokeh(create_gauge(v, 180, tc, THEME["gauge_track"]),
+                      sizing_mode="stretch_width", height=180),
+    )
+
+@param.depends(
+    sensor_state.param.servo_tilt,
+    sensor_state.param.manual_tilt,
+    sensor_state.param.tracking_mode,
+)
+def view_tilt_gauge(_=None, _mt=None, _tm=None):
+    is_manual = sensor_state.tracking_mode == "Manual"
+    v  = sensor_state.manual_tilt if is_manual else sensor_state.servo_tilt
+    tc = THEME["accent_lime"]
+    badge = (
+        f"<span style='font-size:0.55em;background:{tc};color:#fff;"
+        f"padding:2px 8px;border-radius:8px;margin-left:8px;vertical-align:middle;'>MANUAL</span>"
+        if is_manual else ""
+    )
+    return pn.Column(
+        pn.pane.HTML(f"<h2 style='text-align:center;margin:0;color:{tc};'>{v:.0f} \u00b0{badge}</h2>"),
+        pn.pane.Bokeh(create_gauge(v, 90, tc, THEME["gauge_track"]),
+                      sizing_mode="stretch_width", height=180),
+    )
+
+@param.depends(sensor_state.param.battery)
+def view_battery(_=None):
+    v = sensor_state.battery
+    c = "#00ff41" if v >= 3.5 else "#ffcc00" if v >= 3.0 else "#ff4444"
+    return pn.pane.HTML(
+        f"<div style='text-align:center;padding:12px;'>"
+        f"<span style='font-size:2rem;color:{c};'>&#x1F50B; {v:.2f} V</span></div>"
+    )
+
+# TIME FILTER & BOUND CHARTS
+
+time_filter = pn.widgets.RadioButtonGroup(
     name='Historical Range',
     options={'1 Hour': 1, '6 Hours': 6, '24 Hours': 24, '7 Days': 168},
-    button_type='success',
-    value=1
+    value=1, button_type='primary', sizing_mode="stretch_width",
 )
 
-historical_chart_pane = pn.Column(sizing_mode="stretch_width")
+def build_env_chart(hours, last_seen):
+    df = sensor_state.fetch_history(hours)
+    if df.empty or len(df) < 2:
+        return pn.pane.Markdown("*Waiting for data...*")
+    return df.hvplot.line(
+        x="timestamp", y=["temperature", "humidity"],
+        title="Environment Trends",
+        color=[THEME["accent_orange"], THEME["accent"]],
+        line_width=2, responsive=True, height=300,
+    )
 
-def refresh_historical_charts(event=None):
-    """Executes a parameterized SQLite query and renders the resulting historical plots."""
-    hours = time_range_selector.value
-    cutoff_time = datetime.now() - timedelta(hours=hours)
-    
-    try:
-        with sqlite3.connect(DB_FILE) as conn:
-            query = f"SELECT * FROM sensor_data WHERE timestamp >= '{cutoff_time.strftime('%Y-%m-%d %H:%M:%S')}'"
-            df = pd.read_sql_query(query, conn, parse_dates=['timestamp'])
-            
-        if len(df) < 2:
-            historical_chart_pane.objects = [
-                pn.pane.Markdown(f"⏳ *Insufficient historical data collected for the requested {hours}-hour temporal range.*")
-            ]
-            return
+def build_tracking_chart(hours, last_seen):
+    df = sensor_state.fetch_history(hours)
+    if df.empty or len(df) < 2:
+        return pn.pane.Markdown("*Waiting for data...*")
+    return df.hvplot.step(
+        x="timestamp", y=["servo_pan", "servo_tilt"],
+        title="Solar Tracking History",
+        color=[THEME["accent"], THEME["accent_lime"]],
+        line_width=2, responsive=True, height=300,
+    )
 
-        hist_temp = df.hvplot.line(
-            x="timestamp", y="temperature",
-            title=f"Historical Temperature ({hours}h)",
-            xlabel="Time", ylabel="°C",
-            color=PALETTE["temperature"], line_width=2,
-            responsive=True, height=250,
-        )
-        hist_lux = df.hvplot.area(
-            x="timestamp", y="lux",
-            title=f"Historical Light Intensity ({hours}h)",
-            xlabel="Time", ylabel="lux",
-            color=PALETTE["lux"], alpha=0.5, line_width=2,
-            responsive=True, height=250,
-        )
-        
-        historical_chart_pane.objects = [pn.Row(hist_temp, hist_lux)]
-        
-    except Exception as e:
-        print(f"[SQLite] Query execution failed: {e}")
-
-# Bind historical refresh function to the time selector widget
-time_range_selector.param.watch(refresh_historical_charts, 'value')
+bound_env      = pn.bind(build_env_chart,hours=time_filter, last_seen=sensor_state.param.last_seen)
+bound_tracking = pn.bind(build_tracking_chart, hours=time_filter, last_seen=sensor_state.param.last_seen)
 
 
+# PERSISTENT METRICS TABLE
 # ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: DATA TABULATION
-# ─────────────────────────────────────────────────────────────
-summary_table = pn.widgets.Tabulator(
-    pd.DataFrame({
-        "Sensor"      : ["Temperature", "Humidity", "Light", "Battery", "Pan", "Tilt", "Tracking"],
-        "Reading"     : ["—"] * 7,
-        "Unit"        : ["°C", "%", "lux", "V", "°", "°", "—"],
-        "Last updated": ["—"] * 7,
-    }),
-    show_index=False,
-    disabled=True,
-    widths={"Sensor": 120, "Reading": 90, "Unit": 55, "Last updated": 100},
-    sizing_mode="stretch_width",
-    height=280,
+metrics_table = pn.widgets.Tabulator(
+    pd.DataFrame({"Metric": ["--"], "Value": ["--"], "Tracking Mode": ["--"]}),
+    show_index=False, disabled=True,
+    sizing_mode="stretch_width", height=280,
+    theme="midnight",
 )
 
-def refresh_summary_table():
-    """Populates the Tabulator widget with the most recent global state values."""
-    now = live["last_seen"]
-    summary_table.value = pd.DataFrame({
-        "Sensor"      : ["Temperature", "Humidity", "Light", "Battery", "Pan", "Tilt", "Tracking"],
-        "Reading"     : [
-            f"{live['temperature']:.1f}",
-            f"{live['humidity']:.0f}",
-            f"{live['lux']:.0f}",
-            f"{live['battery']:.2f}",
-            f"{live['servo_pan']:.0f}",
-            f"{live['servo_tilt']:.0f}",
-            live["tracking"].upper(),
+def update_metrics_table(event=None):
+    is_manual = sensor_state.tracking_mode == "Manual"
+    pan_val   = sensor_state.manual_pan  if is_manual else sensor_state.servo_pan
+    tilt_val  = sensor_state.manual_tilt if is_manual else sensor_state.servo_tilt
+    mode_str  = sensor_state.tracking_mode
+    metrics_table.value = pd.DataFrame({
+        "Metric": ["Temperature", "Humidity", "Lux", "Pan Angle", "Tilt Angle", "Battery", "Last Update"],
+        "Value": [
+            f"{sensor_state.temperature:.1f} C",
+            f"{sensor_state.humidity:.1f} %RH",
+            f"{sensor_state.lux:.0f} lux",
+            f"{pan_val:.1f} deg",
+            f"{tilt_val:.1f} deg",
+            f"{sensor_state.battery:.2f} V",
+            sensor_state.last_seen,
         ],
-        "Unit"        : ["°C", "%", "lux", "V", "°", "°", "—"],
-        "Last updated": [now] * 7,
+        "Tracking Mode": [mode_str] * 7,
     })
 
+sensor_state.param.watch(update_metrics_table,
+                         ['last_seen', 'tracking_mode', 'manual_pan', 'manual_tilt'])
+update_metrics_table()
 
+# CONNECTION STATUS WIDGET
 # ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: SYSTEM LOGGING
-# ─────────────────────────────────────────────────────────────
-incoming_log = pn.widgets.TextAreaInput(
-    name="📡 Incoming sensor data",
-    value="Awaiting payload from edge device...\n",
-    height=200,
-    disabled=True,
-    sizing_mode="stretch_width",
+display_conn = pn.widgets.StaticText(
+    name="SYSTEM STATUS", value="Connecting...", sizing_mode="stretch_width"
 )
 
-outgoing_log = pn.widgets.TextAreaInput(
-    name="📤 Commands sent to ESP32",
-    value="Command queue empty.\n",
-    height=130,
-    disabled=True,
-    sizing_mode="stretch_width",
-)
-
-MAX_LOG_LINES = 50
-
-def log_incoming(entry):
-    lines = incoming_log.value.splitlines()
-    incoming_log.value = "\n".join([entry] + lines[:MAX_LOG_LINES]) + "\n"
-
-def log_outgoing(entry):
-    lines = outgoing_log.value.splitlines()
-    outgoing_log.value = "\n".join([entry] + lines[:MAX_LOG_LINES]) + "\n"
-
-btn_clear_logs = pn.widgets.Button(
-    name="🗑 Clear logs", button_type="danger", width=130
-)
-
-def on_clear_logs(event):
-    incoming_log.value = "Logs purged.\n"
-    outgoing_log.value = "Logs purged.\n"
-
-btn_clear_logs.on_click(on_clear_logs)
-
-
-# ─────────────────────────────────────────────────────────────
-# UI COMPONENTS: ACTUATOR CONTROLS
-# ─────────────────────────────────────────────────────────────
-btn_tracking = pn.widgets.Toggle(
-    name="🔄 Auto-tracking: OFF", value=False,
-    button_type="success", width=210,
-)
-btn_led = pn.widgets.Toggle(
-    name="💡 LED: OFF", value=False,
-    button_type="default", width=210,
-)
-btn_buzzer = pn.widgets.Button(
-    name="🔔 Trigger Buzzer", button_type="warning", width=210,
-)
-
-sl_pan = pn.widgets.IntSlider(
-    name="Pan angle (°)", start=0, end=180, value=90, step=1,
-)
-sl_tilt = pn.widgets.IntSlider(
-    name="Tilt angle (°)", start=0, end=90, value=45, step=1,
-)
-sl_threshold = pn.widgets.IntSlider(
-    name="Lux threshold", start=100, end=2000, value=500, step=10,
-)
-
-btn_send_servo = pn.widgets.Button(
-    name="📡 Send to ESP32", button_type="primary", width=210,
-)
-btn_send_threshold = pn.widgets.Button(
-    name="📡 Send to ESP32", button_type="primary", width=210,
-)
-
-def servo_angle_preview(pan, tilt):
-    """Generates a dynamic markdown string reflecting proposed servo parameters."""
-    return pn.pane.Markdown(
-        f"*Transmission preview →* pan **{pan}°** | tilt **{tilt}°**",
-        sizing_mode="stretch_width",
+@param.depends(sensor_state.param.connected, watch=True)
+def _update_conn_display(_=None):
+    display_conn.value = (
+        f"ONLINE -- Connected to {MQTT_BROKER}" if sensor_state.connected
+        else f"OFFLINE -- reconnecting to {MQTT_BROKER}..."
     )
 
-servo_preview_pane = pn.bind(servo_angle_preview, pan=sl_pan, tilt=sl_tilt)
-
 
 # ─────────────────────────────────────────────────────────────
-# MQTT NETWORK PROTOCOL HANDLERS
+# CONTROL WIDGETS
 # ─────────────────────────────────────────────────────────────
-# API Version handling for backward compatibility with paho-mqtt distributions
-try:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-except AttributeError:
-    client = mqtt.Client()
+control_switch_mode = pn.widgets.Switch(name="Auto-Tracking Mode", value=True)
+control_pan  = pn.widgets.IntSlider(name="Manual Pan Angle",  start=0, end=180, step=1, value=0)
+control_tilt = pn.widgets.IntSlider(name="Manual Tilt Angle", start=0, end=90,  step=1, value=45)
+btn_buzzer = pn.widgets.Button(name="SOUND BUZZER", button_type="warning", sizing_mode="stretch_width")
+btn_buzzer_off = pn.widgets.Button(name="MUTE BUZZER", button_type="danger", sizing_mode="stretch_width") 
+btn_theme    = pn.widgets.Button(name="Light Theme",         button_type="light",    sizing_mode="stretch_width")
 
-def on_connect(c, userdata, flags, reason_code, properties=None):
-    """Callback invoked upon successful broker authentication and connection."""
-    if reason_code == 0:
-        live["connected"] = True
-        display_conn.value = f"✅ Connected to HiveMQ Cloud"
-        
-        # Subscribe to required sensor topics post-connection
-        for topic in SENSOR_TOPICS.values():
-            c.subscribe(topic)
+manual_pane = pn.Column(
+    pn.layout.Divider(),
+    pn.pane.Markdown("**MANUAL POSITIONING**", styles={"color": THEME["accent"]}),
+    control_pan,
+    control_tilt,
+    visible=False,
+)
+
+def publish_command(topic_key: str, payload: str) -> None:
+    if sensor_state.connected:
+        client.publish(CONTROL_TOPICS[topic_key], str(payload))
+        log_command(topic_key, payload, sent_by="operator")
+        logger.info(f"Command -> {topic_key}: {payload}")
     else:
-        display_conn.value = f"❌ Connection failed (code {reason_code})"
+        logger.warning(f"Command dropped (not connected): {topic_key}={payload}")
 
-def on_disconnect(c, userdata, disconnect_flags=None, reason_code=None, properties=None):
-    """Callback invoked upon broker disconnection."""
-    live["connected"] = False
-    display_conn.value = "⚠️ Disconnected — attempting protocol retry…"
+def on_mode_switch(event):
+    auto = event.new
+    manual_pane.visible = not auto
+    sensor_state.tracking_mode = "Automatic" if auto else "Manual"
+    publish_command("tracking_mode", "AUTO" if auto else "MANUAL")
 
-def on_message(c, userdata, msg):
-    """Primary routing callback for processing incoming topic payloads."""
-    try:
-        payload = msg.payload.decode().strip()
-        topic   = msg.topic
+control_switch_mode.param.watch(on_mode_switch, 'value')
 
-        # Update global state corresponding to the received topic
-        if topic == SENSOR_TOPICS["temperature"]:
-            live["temperature"] = float(payload)
-        elif topic == SENSOR_TOPICS["humidity"]:
-            live["humidity"] = float(payload)
-        elif topic == SENSOR_TOPICS["lux"]:
-            live["lux"] = float(payload)
-        elif topic == SENSOR_TOPICS["battery"]:
-            live["battery"] = float(payload)
-        elif topic == SENSOR_TOPICS["servo_pan"]:
-            live["servo_pan"] = float(payload)
-            display_pan.value = float(payload)
-        elif topic == SENSOR_TOPICS["servo_tilt"]:
-            live["servo_tilt"] = float(payload)
-            display_tilt.value = float(payload)
-        elif topic == SENSOR_TOPICS["tracking"]:
-            live["tracking"] = payload
-            display_mode.value = payload.upper()
+def on_pan_change(event):
+    sensor_state.manual_pan = float(event.new)
+    publish_command("servo_pan", str(event.new))
 
-        live["last_seen"] = datetime.now().strftime("%H:%M:%S")
-        display_time.value = live["last_seen"]
-        
-        sensor_name = topic.split("/")[-1]
-        log_incoming(f"[{live['last_seen']}]  {sensor_name}: {payload}")
+def on_tilt_change(event):
+    sensor_state.manual_tilt = float(event.new)
+    publish_command("servo_tilt", str(event.new))
 
-        # Execute data storage logic exclusively on temperature payload arrival
-        # to prevent redundant row insertion within the database.
-        if topic == SENSOR_TOPICS["temperature"]:
-            
-            # Step 1: Append telemetry to volatile memory buffers
-            readings["time"].append(live["last_seen"])
-            readings["temperature"].append(live["temperature"])
-            readings["humidity"].append(live["humidity"])
-            readings["lux"].append(live["lux"])
-            readings["battery"].append(live["battery"])
+control_pan.param.watch(on_pan_change,'value_throttled')
+control_tilt.param.watch(on_tilt_change,'value_throttled') 
+btn_buzzer.on_click(lambda e: publish_command("buzzer", "TRIGGER"))
+btn_buzzer_off.on_click(lambda e: publish_command("buzzer", "OFF")) # <-- NEW
 
-            # Step 2: Execute non-volatile persistent storage insertion
-            try:
-                with sqlite3.connect(DB_FILE) as conn:
-                    c = conn.cursor()
-                    c.execute(
-                        "INSERT INTO sensor_data (timestamp, temperature, humidity, lux, battery) VALUES (?, ?, ?, ?, ?)",
-                        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), live["temperature"], live["humidity"], live["lux"], live["battery"])
-                    )
-                    conn.commit()
-            except Exception as db_err:
-                print(f"[SQLite] Insertion fault detected: {db_err}")
-
-            # Step 3: Trigger UI component rendering cycles
-            refresh_trend_card(trend_temp, "temperature")
-            refresh_trend_card(trend_hum,  "humidity")
-            refresh_trend_card(trend_lux,  "lux")
-            refresh_trend_card(trend_bat,  "battery")
-            refresh_live_charts()
-            refresh_historical_charts() 
-            refresh_summary_table()
-
-    except Exception as e:
-        print(f"[MQTT] Payload parsing exception: {e}")
-
-# Register callback functions with the MQTT client instance
-client.on_connect    = on_connect
-client.on_disconnect = on_disconnect
-client.on_message    = on_message
-
-def connect_to_broker():
-    """Initializes secure MQTT client connection on an isolated thread."""
-    try:
-        # Enforce authentication credentials and TLS client protocols
-        client.username_pw_set(MQTT_USER, MQTT_PASS)
-        client.tls_set(tls_version=ssl.PROTOCOL_TLS_CLIENT)
-        
-        client.connect(BROKER, PORT, keepalive=60)
-        client.loop_forever()
-    except Exception as e:
-        display_conn.value = f"❌ MQTT client exception: {e}"
-
-# Dispatch the MQTT network loop to a daemon thread
-broker_thread = threading.Thread(target=connect_to_broker, daemon=True)
-broker_thread.start()
-
-
-# ─────────────────────────────────────────────────────────────
-# CONTROL EVENT HANDLERS
-# ─────────────────────────────────────────────────────────────
-def send_command(topic, payload):
-    """Transmits structured payload data to designated MQTT topics."""
-    if live["connected"]:
-        client.publish(topic, str(payload), qos=1)
-    else:
-        print("[Dashboard] Transmission aborted: Client disconnected.")
-
-def on_tracking_toggle(event):
-    val = "ON" if event.new else "OFF"
-    send_command(COMMAND_TOPICS["tracking"], val)
-    btn_tracking.name = f"🔄 Auto-tracking: {val}"
-    log_outgoing(f"[{datetime.now().strftime('%H:%M:%S')}]  tracking_mode → {val}")
-
-def on_led_toggle(event):
-    val = "ON" if event.new else "OFF"
-    send_command(COMMAND_TOPICS["led"], val)
-    btn_led.name = f"💡 LED: {val}"
-    log_outgoing(f"[{datetime.now().strftime('%H:%M:%S')}]  led_state → {val}")
-
-def on_buzzer_click(event):
-    send_command(COMMAND_TOPICS["buzzer"], "TRIGGER")
-    log_outgoing(f"[{datetime.now().strftime('%H:%M:%S')}]  buzzer_actuation → TRIGGER")
-
-def on_send_servo(event):
-    send_command(COMMAND_TOPICS["servo_pan"],  sl_pan.value)
-    send_command(COMMAND_TOPICS["servo_tilt"], sl_tilt.value)
-    log_outgoing(f"[{datetime.now().strftime('%H:%M:%S')}]  servo_vector → pan={sl_pan.value}°, tilt={sl_tilt.value}°")
-
-def on_send_threshold(event):
-    send_command(COMMAND_TOPICS["threshold"], sl_threshold.value)
-    log_outgoing(f"[{datetime.now().strftime('%H:%M:%S')}]  lux_threshold → {sl_threshold.value} lx")
-
-# Bind control event functions to UI widget parameters
-btn_tracking.param.watch(on_tracking_toggle, "value")
-btn_led.param.watch(on_led_toggle, "value")
-btn_buzzer.on_click(on_buzzer_click)
-btn_send_servo.on_click(on_send_servo)
-btn_send_threshold.on_click(on_send_threshold)
-
-
-# ─────────────────────────────────────────────────────────────
-# LAYOUT STRUCTURE & COMPOSITION
-# ─────────────────────────────────────────────────────────────
-
-# Instantiate the primary content column (Central Workspace)
-main_content = pn.Column(
-    pn.pane.Markdown("## Live Sensor Readings"),
-    pn.GridBox(
-        card_temp, card_hum, card_lux, card_bat,
-        ncols=4,
+# LAYOUT BUILDER FUNCTIONS
+def make_card(title, color, *content):
+    return pn.Card(
+        *content,
+        title=title,
         sizing_mode="stretch_width",
-        styles={"gap": "16px"},
-    ),
-
-    pn.pane.Markdown("## Solar Panel Orientation"),
-    pn.GridBox(display_pan, display_tilt, ncols=2),
-    pn.Row(
-        pn.Column(pn.pane.Markdown("**Tracking mode**"), display_mode),
-        pn.Column(pn.pane.Markdown("**Last reading**"),  display_time),
-        pn.Column(pn.pane.Markdown("**Broker status**"), display_conn),
-    ),
-
-    pn.pane.Markdown("## All Sensors at a Glance"),
-    summary_table,
-
-    pn.pane.Markdown("## Live Trends — last 20 readings"),
-    pn.Row(live_chart_temp, live_chart_lux),
-    
-    pn.pane.Markdown("## Historical Data"),
-    pn.Row(pn.pane.Markdown("**Select Range:**", margin=(10, 10, 0, 0)), time_range_selector),
-    historical_chart_pane,
-)
-
-# Instantiate the auxiliary content column (Sidebar Controls)
-sidebar_content = [
-    pn.Column(
-        pn.Card(
-            btn_tracking,
-            btn_led,
-            btn_buzzer,
-            title="⚡ Tracking & Actuators",
-            collapsed=False,
-            sizing_mode="stretch_width",
-        ),
-        pn.Spacer(height=10),
-        pn.Card(
-            pn.pane.Markdown("Configure vector parameters, then execute transmission."),
-            sl_pan,
-            sl_tilt,
-            servo_preview_pane,
-            btn_send_servo,
-            title="🎮 Manual Servo Control",
-            collapsed=False,
-            sizing_mode="stretch_width",
-        ),
-        pn.Spacer(height=10),
-        pn.Card(
-            pn.pane.Markdown("Define environmental threshold for autonomous tracking engagement."),
-            sl_threshold,
-            btn_send_threshold,
-            title="🔆 Light Sensitivity Configuration",
-            collapsed=False,
-            sizing_mode="stretch_width",
-        ),
-        pn.Spacer(height=10),
-        pn.Card(
-            incoming_log,
-            outgoing_log,
-            btn_clear_logs,
-            title="📋 MQTT Transmission Log",
-            collapsed=False,
-            sizing_mode="stretch_width",
-        ),
+        styles={
+            "background": THEME["card_bg"],
+            "border":     f"2px solid {color}",
+            "padding":    "10px",
+        },
     )
-]
 
-# Execute initial database query to populate static historical panes
-refresh_historical_charts()
+def build_main():
+    T = THEME
+    return pn.Column(
+        # Header
+        pn.Row(
+            pn.pane.Markdown(
+                "# Solar Tracker Command Center ☀️",
+                styles={"color": T["accent"], "text-align": "center", "margin": "0"},
+            ),
+            styles={
+                "background":    f"linear-gradient(135deg,{T['bg']} 0%,{T['bg']} 100%)",
+                "padding":       "20px",
+                "border-radius": "12px",
+            },
+        ),
+        display_conn,
 
-# Combine layout structures into the final Panel Template
-dashboard = pn.template.FastListTemplate(
-    title="☀️ Solar Tracker Dashboard",
-    accent_base_color="#0F6E56",
-    header_background="#0F6E56",
-    theme="dark",
-    theme_toggle=True,
-    main_max_width="1400px",
-    sidebar=sidebar_content,
-    main=[main_content],
-)
+        # Live sensor gauges
+        pn.pane.Markdown("**LIVE SENSOR FEED**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        pn.GridBox(
+            make_card("TEMPERATURE", T["accent_orange"], view_temp_gauge),
+            make_card("HUMIDITY",    T["accent"],view_hum_gauge),
+            ncols=2, sizing_mode="stretch_width",
+        ),
 
-# Expose the application object for WSGI server deployment
-dashboard.servable()
+        # Panel orientation gauges
+        pn.pane.Markdown("**PANEL ORIENTATION**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        pn.GridBox(
+            make_card("PAN ANGLE",  T["accent"],      view_pan_gauge),
+            make_card("TILT ANGLE", T["accent_lime"], view_tilt_gauge),
+            ncols=2, sizing_mode="stretch_width",
+        ),
+
+        # Battery
+        pn.pane.Markdown("**BATTERY**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        make_card("BATTERY VOLTAGE", T["accent_purple"], view_battery),
+
+        # Live metrics table
+        pn.pane.Markdown("**LIVE METRICS TABLE**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        metrics_table,
+
+        # Historical trends
+        pn.pane.Markdown("**HISTORICAL TRENDS**",
+                         styles={"color": T["accent"], "font-weight": "700"}),
+        time_filter,
+        pn.Column(
+            pn.panel(bound_env,      sizing_mode="stretch_width", height=300),
+            pn.panel(bound_tracking, sizing_mode="stretch_width", height=300),
+        ),
+
+        sizing_mode="stretch_width",
+        styles={"background": T["bg"], "padding": "30px"},
+    )
+
+def build_sidebar():
+    """
+    Builds the sidebar using the current THEME.
+    Called once at startup and again whenever the theme is toggled.
+    """
+    T = THEME
+    return pn.Column(
+        pn.Card(
+            pn.Column(
+                pn.pane.Markdown("**DISPLAY**", styles={"color": T["accent"]}),
+                btn_theme,
+                pn.layout.Divider(),
+                pn.pane.Markdown("**TRACKING OVERRIDE**",  styles={"color": T["accent"]}),
+                control_switch_mode,
+                manual_pane,
+                pn.layout.Divider(),
+                pn.pane.Markdown("**ALERTS & SIGNALS**",styles={"color": T["acc
