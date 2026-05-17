@@ -1,6 +1,6 @@
 // The Cyber Alchemists
 // EPG317E Capstone Project
-// ESP32 Solar Tracker Code aligned with Python Panel Dashboard
+// ESP32 Solar Tracker Code aligned with the Python Dashboard
 
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -18,16 +18,17 @@ const char* WIFI_SSID     = "The Cyber Alchemists IoT";
 const char* WIFI_PASSWORD = "Cy13ER123";
 
 // ─────────────────────────────────────────────────────────────
-// MQTT CONFIG — must match dashboard.py
+// MQTT CONFIG
+// Must match dashboard.py
 // ─────────────────────────────────────────────────────────────
 const char* MQTT_BROKER   = "4438a6aa9a8f42ddb3bbbf61da5f9cf5.s1.eu.hivemq.cloud";
 const int   MQTT_PORT     = 8883;
 const char* MQTT_USERNAME = "Cyber_Alchemy";
 const char* MQTT_PASSWD   = "P@ss123456";
 
-const char* TEAM_ID = "TheCyberAlchemists";
-
-// Publish topics: ESP32 → Dashboard
+// ─────────────────────────────────────────────────────────────
+// MQTT TOPICS: ESP32 → Dashboard
+// ─────────────────────────────────────────────────────────────
 const char* T_TEMP    = "epg317e/solar/TheCyberAlchemists/sensors/temperature";
 const char* T_HUM     = "epg317e/solar/TheCyberAlchemists/sensors/humidity";
 const char* T_LUX     = "epg317e/solar/TheCyberAlchemists/sensors/lux";
@@ -35,7 +36,9 @@ const char* T_BATTERY = "epg317e/solar/TheCyberAlchemists/sensors/battery";
 const char* T_PAN_FB  = "epg317e/solar/TheCyberAlchemists/actuators/servo_pan";
 const char* T_TILT_FB = "epg317e/solar/TheCyberAlchemists/actuators/servo_tilt";
 
-// Subscribe topics: Dashboard → ESP32
+// ─────────────────────────────────────────────────────────────
+// MQTT TOPICS: Dashboard → ESP32
+// ─────────────────────────────────────────────────────────────
 const char* T_MODE     = "epg317e/solar/TheCyberAlchemists/control/tracking_mode";
 const char* T_PAN_CMD  = "epg317e/solar/TheCyberAlchemists/control/servo_pan";
 const char* T_TILT_CMD = "epg317e/solar/TheCyberAlchemists/control/servo_tilt";
@@ -81,15 +84,15 @@ int tolerance = 25;
 
 bool autoMode = true;
 bool ledState = false;
-bool buzzerState = false;
+bool buzzerPulseActive = false;
 
 unsigned long lastPublish = 0;
 unsigned long lastReconnect = 0;
 unsigned long buzzerStartedAt = 0;
 
-const unsigned long PUBLISH_MS = 1000;
-const unsigned long RECONNECT_MS = 5000;
-const unsigned long BUZZER_PULSE_MS = 300;
+const unsigned long PUBLISH_MS = 1000;      // Publish every 1 second
+const unsigned long RECONNECT_MS = 5000;    // Retry MQTT every 5 seconds
+const unsigned long BUZZER_PULSE_MS = 300;  // Buzzer pulse duration
 
 // ─────────────────────────────────────────────────────────────
 // BATTERY VOLTAGE READING
@@ -110,29 +113,28 @@ float readBatteryVoltage() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// SAFE LCD PRINT HELPER
+// LCD HELPER
+// Keeps each LCD line clean by padding to 16 characters
 // ─────────────────────────────────────────────────────────────
-void printPaddedLCD(const String& text) {
-  String output = text;
-
-  while (output.length() < 16) {
-    output += " ";
+void printPaddedLCD(String text) {
+  while (text.length() < 16) {
+    text += " ";
   }
 
-  lcd.print(output.substring(0, 16));
+  lcd.print(text.substring(0, 16));
 }
 
 // ─────────────────────────────────────────────────────────────
 // BUZZER HELPERS
 // ─────────────────────────────────────────────────────────────
 void buzzerOn() {
-  buzzerState = true;
+  buzzerPulseActive = true;
   buzzerStartedAt = millis();
   digitalWrite(BUZZER, HIGH);
 }
 
 void buzzerOff() {
-  buzzerState = false;
+  buzzerPulseActive = false;
   digitalWrite(BUZZER, LOW);
 }
 
@@ -147,7 +149,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   Serial.printf("[MQTT IN] %s -> %s\n", topic, msg);
 
-  // Auto/manual tracking mode
+  // Tracking mode command
   if (strcmp(topic, T_MODE) == 0) {
     if (strcmp(msg, "AUTO") == 0) {
       autoMode = true;
@@ -162,7 +164,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     Serial.printf("Tracking mode: %s\n", autoMode ? "AUTO" : "MANUAL");
   }
 
-  // Manual pan from dashboard slider
+  // Manual pan command from dashboard slider
   else if (strcmp(topic, T_PAN_CMD) == 0) {
     if (!autoMode) {
       servoH = constrain(atoi(msg), 0, 180);
@@ -172,7 +174,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     }
   }
 
-  // Manual tilt from dashboard slider
+  // Manual tilt command from dashboard slider
   else if (strcmp(topic, T_TILT_CMD) == 0) {
     if (!autoMode) {
       servoV = constrain(atoi(msg), 0, 90);
@@ -213,6 +215,29 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 }
 
 // ─────────────────────────────────────────────────────────────
+// WIFI CONNECT
+// ─────────────────────────────────────────────────────────────
+void connectWiFi() {
+  Serial.printf("Connecting to Wi-Fi: %s\n", WIFI_SSID);
+
+  lcd.setCursor(0, 1);
+  printPaddedLCD("WiFi connecting");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.printf("\nWi-Fi connected. IP: %s\n", WiFi.localIP().toString().c_str());
+
+  lcd.setCursor(0, 1);
+  printPaddedLCD("WiFi: OK");
+  delay(800);
+}
+
+// ─────────────────────────────────────────────────────────────
 // MQTT CONNECT / RECONNECT
 // ─────────────────────────────────────────────────────────────
 void connectMQTT() {
@@ -244,29 +269,6 @@ void connectMQTT() {
     lcd.setCursor(0, 1);
     printPaddedLCD("MQTT: FAILED");
   }
-}
-
-// ─────────────────────────────────────────────────────────────
-// WIFI CONNECT
-// ─────────────────────────────────────────────────────────────
-void connectWiFi() {
-  Serial.printf("Connecting to Wi-Fi: %s\n", WIFI_SSID);
-
-  lcd.setCursor(0, 1);
-  printPaddedLCD("WiFi connecting");
-
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-
-  Serial.printf("\nWi-Fi connected. IP: %s\n", WiFi.localIP().toString().c_str());
-
-  lcd.setCursor(0, 1);
-  printPaddedLCD("WiFi: OK");
-  delay(800);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -324,7 +326,7 @@ void setup() {
 // LOOP
 // ─────────────────────────────────────────────────────────────
 void loop() {
-  // Keep Wi-Fi alive
+  // Keep Wi-Fi connected
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();
   }
@@ -347,16 +349,18 @@ void loop() {
   if (buttonPressed) {
     digitalWrite(BUZZER, HIGH);
   }
-  else if (!buzzerState) {
+  else if (!buzzerPulseActive) {
     digitalWrite(BUZZER, LOW);
   }
 
-  // Auto turn off dashboard-triggered buzzer pulse
-  if (buzzerState && millis() - buzzerStartedAt >= BUZZER_PULSE_MS) {
+  // Automatically turn off dashboard-triggered buzzer pulse
+  if (buzzerPulseActive && millis() - buzzerStartedAt >= BUZZER_PULSE_MS) {
     buzzerOff();
   }
 
-  // Read sensors
+  // ───────────────────────────────────────────────────────────
+  // READ SENSORS
+  // ───────────────────────────────────────────────────────────
   float lux = lightMeter.readLightLevel();
 
   int left  = analogRead(LDR_LEFT);
@@ -369,13 +373,16 @@ void loop() {
 
   if (humReading == -1 || tempReading == -1) {
     Serial.println("DHT11 read error.");
+
     humReading = 0;
     tempReading = 0;
   }
 
   float battery = readBatteryVoltage();
 
-  // Auto tracking
+  // ───────────────────────────────────────────────────────────
+  // AUTO TRACKING
+  // ───────────────────────────────────────────────────────────
   if (autoMode) {
     int horizontalError = left - right;
     int verticalError = top - bot;
@@ -405,12 +412,15 @@ void loop() {
     servoVerti.write(servoV);
   }
 
-  // LCD display
+  // ───────────────────────────────────────────────────────────
+  // LCD DISPLAY
+  // ───────────────────────────────────────────────────────────
   lcd.setCursor(0, 0);
 
   String line1 = autoMode ? "AUTO " : "MAN  ";
   line1 += "Lux:";
   line1 += String((int)lux);
+
   printPaddedLCD(line1);
 
   lcd.setCursor(0, 1);
@@ -421,9 +431,12 @@ void loop() {
   line2 += String(servoV);
   line2 += " C:";
   line2 += String(tempReading);
+
   printPaddedLCD(line2);
 
-  // Publish to dashboard
+  // ───────────────────────────────────────────────────────────
+  // PUBLISH TO DASHBOARD
+  // ───────────────────────────────────────────────────────────
   unsigned long now = millis();
 
   if (now - lastPublish >= PUBLISH_MS) {
