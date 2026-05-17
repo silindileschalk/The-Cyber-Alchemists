@@ -115,7 +115,7 @@ Tracking accuracy: based on LDR differential threshold
 System stability: improved via reconnection logic
  ******Installation & Setup******
 1. Clone Project
-git clone https://github.com/your-repo/solar-tracker
+git clone https://github.com/silindileschalk/The-Cyber-Alchemists/
 2. Install Arduino Libraries
 
 Install via Library Manager:
