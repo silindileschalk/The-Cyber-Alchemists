@@ -90,9 +90,9 @@ unsigned long lastPublish = 0;
 unsigned long lastReconnect = 0;
 unsigned long buzzerStartedAt = 0;
 
-const unsigned long PUBLISH_MS = 1000;
-const unsigned long RECONNECT_MS = 5000;
-const unsigned long BUZZER_PULSE_MS = 300;
+const unsigned long PUBLISH_MS = 1000;      // Publish every 1 second
+const unsigned long RECONNECT_MS = 5000;    // Retry MQTT every 5 seconds
+const unsigned long BUZZER_PULSE_MS = 300;  // Buzzer pulse duration
 
 // ─────────────────────────────────────────────────────────────
 // BATTERY VOLTAGE READING
@@ -149,6 +149,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   Serial.printf("[MQTT IN] %s -> %s\n", topic, msg);
 
+  // Tracking mode command
   if (strcmp(topic, T_MODE) == 0) {
     if (strcmp(msg, "AUTO") == 0) {
       autoMode = true;
@@ -163,6 +164,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     Serial.printf("Tracking mode: %s\n", autoMode ? "AUTO" : "MANUAL");
   }
 
+  // Manual pan command from dashboard slider
   else if (strcmp(topic, T_PAN_CMD) == 0) {
     if (!autoMode) {
       servoH = constrain(atoi(msg), 0, 180);
@@ -172,6 +174,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     }
   }
 
+  // Manual tilt command from dashboard slider
   else if (strcmp(topic, T_TILT_CMD) == 0) {
     if (!autoMode) {
       servoV = constrain(atoi(msg), 0, 90);
@@ -181,6 +184,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     }
   }
 
+  // LED command from dashboard
   else if (strcmp(topic, T_LED) == 0) {
     if (strcmp(msg, "TOGGLE") == 0) {
       ledState = !ledState;
@@ -197,6 +201,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     Serial.printf("LED: %s\n", ledState ? "ON" : "OFF");
   }
 
+  // Buzzer command from dashboard
   else if (strcmp(topic, T_BUZZER) == 0) {
     if (strcmp(msg, "TRIGGER") == 0 || strcmp(msg, "ON") == 0) {
       buzzerOn();
@@ -321,10 +326,12 @@ void setup() {
 // LOOP
 // ─────────────────────────────────────────────────────────────
 void loop() {
+  // Keep Wi-Fi connected
   if (WiFi.status() != WL_CONNECTED) {
     connectWiFi();
   }
 
+  // MQTT keepalive and reconnect
   if (!mqttClient.connected()) {
     unsigned long nowReconnect = millis();
 
@@ -336,6 +343,7 @@ void loop() {
 
   mqttClient.loop();
 
+  // Physical button triggers buzzer while pressed
   bool buttonPressed = digitalRead(BUTTON) == LOW;
 
   if (buttonPressed) {
@@ -345,10 +353,14 @@ void loop() {
     digitalWrite(BUZZER, LOW);
   }
 
+  // Automatically turn off dashboard-triggered buzzer pulse
   if (buzzerPulseActive && millis() - buzzerStartedAt >= BUZZER_PULSE_MS) {
     buzzerOff();
   }
 
+  // ───────────────────────────────────────────────────────────
+  // READ SENSORS
+  // ───────────────────────────────────────────────────────────
   float lux = lightMeter.readLightLevel();
 
   int left  = analogRead(LDR_LEFT);
@@ -368,6 +380,9 @@ void loop() {
 
   float battery = readBatteryVoltage();
 
+  // ───────────────────────────────────────────────────────────
+  // AUTO TRACKING
+  // ───────────────────────────────────────────────────────────
   if (autoMode) {
     int horizontalError = left - right;
     int verticalError = top - bot;
@@ -397,6 +412,9 @@ void loop() {
     servoVerti.write(servoV);
   }
 
+  // ───────────────────────────────────────────────────────────
+  // LCD DISPLAY
+  // ───────────────────────────────────────────────────────────
   lcd.setCursor(0, 0);
 
   String line1 = autoMode ? "AUTO " : "MAN  ";
@@ -416,6 +434,9 @@ void loop() {
 
   printPaddedLCD(line2);
 
+  // ───────────────────────────────────────────────────────────
+  // PUBLISH TO DASHBOARD
+  // ───────────────────────────────────────────────────────────
   unsigned long now = millis();
 
   if (now - lastPublish >= PUBLISH_MS) {
